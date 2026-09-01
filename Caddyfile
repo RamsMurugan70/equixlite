@@ -1,0 +1,51 @@
+# Caddy in front of EquixLite.
+#
+# Naming the site by its domain is what makes Caddy fetch a certificate for it automatically —
+# there is no TLS block to write, and the http→https redirect comes with it. A bare `:80` here
+# would serve plain http forever and quietly do nothing about certificates.
+
+{$DOMAIN} {
+	tls {$ACME_EMAIL}
+
+	encode zstd gzip
+
+	# The app sets its own CSP and HSTS — it knows what the page actually needs, and two sources
+	# of the same header is how you end up with one silently overriding the other. Caddy adds
+	# only what belongs to the edge.
+	header {
+		# Caddy advertises itself in Server: by default; there is no reason to.
+		-Server
+	}
+
+	reverse_proxy equixlite:5070 {
+		# The app trusts X-Forwarded-Proto to decide whether the connection was secure, and
+		# X-Forwarded-For to rate-limit per user rather than per proxy. Caddy sets both by
+		# default; they are named here because the app's behaviour depends on them and that
+		# dependency should be visible from this file.
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+
+		# A full universe scan runs a couple of minutes, but every HTTP call the app makes is
+		# short — the scan is fired and polled. 60s is generous for the slowest page (Portfolio
+		# Health, which fetches two years of prices per holding) without holding sockets open
+		# for a request that has actually died.
+		transport http {
+			response_header_timeout 60s
+		}
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+		# Health checks every 30s would otherwise be most of the log.
+		format filter {
+			wrap json
+			fields {
+				request>headers>Cookie delete
+				request>headers>Authorization delete
+			}
+		}
+	}
+}

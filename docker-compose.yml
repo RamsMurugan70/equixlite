@@ -1,0 +1,73 @@
+# EquixLite: the app, and Caddy in front of it for TLS.
+#
+# Caddy obtains and renews a Let's Encrypt certificate on its own, given a domain whose A record
+# points here and ports 80 and 443 reachable. That is the entire TLS story — there is no certbot
+# cron and no renewal to forget.
+#
+# THE APP PORT IS NOT PUBLISHED. `expose` makes 5070 reachable from Caddy on the internal
+# network and from nowhere else. Publishing it would leave a plain-http copy of the whole app
+# listening on the public interface, cookies and all, next to the HTTPS one.
+
+services:
+  equixlite:
+    build: .
+    image: equixlite:latest
+    restart: unless-stopped
+    expose:
+      - "5070"
+    environment:
+      NODE_ENV: production
+      PORT: "5070"
+      DB_PATH: /data/equixlite.db
+      # Behind Caddy, so the cookie is Secure and the app enforces HTTPS.
+      COOKIE_SECURE: "true"
+      SCHEDULER: "true"
+      # Read from the host's .env — never written into the image. Compose fails loudly on a
+      # missing one because of the `?` form, which beats booting with an improvised secret.
+      PUBLIC_URL: "${PUBLIC_URL:?set PUBLIC_URL, e.g. https://equixlite.example.com}"
+      SESSION_SECRET: "${SESSION_SECRET:?generate with openssl rand -hex 32}"
+      CREDENTIAL_KEY: "${CREDENTIAL_KEY:?generate with openssl rand -hex 32, and keep a copy}"
+      # Container clock is UTC; the app converts to IST itself. Set anyway so log timestamps
+      # read the way you think about the trading day.
+      TZ: Asia/Kolkata
+    volumes:
+      - equix-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5070/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      # Without this, container logs grow until the disk is full. This is the single most common
+      # way a small box that has been running fine for months falls over.
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"      # required for the ACME HTTP challenge and the http→https redirect
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    environment:
+      # Caddy needs the bare hostname for the certificate; PUBLIC_URL carries the scheme.
+      DOMAIN: "${DOMAIN:?set DOMAIN, e.g. equixlite.example.com}"
+      ACME_EMAIL: "${ACME_EMAIL:?set ACME_EMAIL for Lets Encrypt expiry notices}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Named volumes, not bind mounts: losing caddy-data means re-issuing certificates, and
+      # Let's Encrypt rate-limits that to five per week per domain.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - equixlite
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  equix-data:
+  caddy-data:
+  caddy-config:

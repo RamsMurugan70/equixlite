@@ -1,0 +1,24 @@
+# Anything that would bloat the build context, leak a secret, or be rebuilt inside the image.
+node_modules
+**/node_modules
+.git
+.gitignore
+
+# NEVER ship the real environment file. Compose supplies these at runtime; baking them into a
+# layer puts SESSION_SECRET and CREDENTIAL_KEY in the image for anyone who can pull it.
+.env
+.env.*
+!.env.example
+
+# The production database lives in a volume, not in the image.
+data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+Dockerfile
+docker-compose.yml
+Caddyfile
+start.bat
+*.md

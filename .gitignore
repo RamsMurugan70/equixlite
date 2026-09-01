@@ -1,0 +1,14 @@
+node_modules/
+
+# The whole data directory, not data/*.db — backups live in data/backups/ and a pattern that
+# only matches the top level would have committed a 22MB database of real user data, including
+# the encrypted broker credential rows.
+data/
+
+.env
+.env.local
+*.log
+
+# Caddy's certificates and access logs, if anyone binds them to the working tree.
+caddy-data/
+caddy-config/

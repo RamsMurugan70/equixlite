@@ -1,0 +1,27 @@
+{
+  "name": "equixlite-server",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "migrate": "node src/db/migrations/run.js",
+    "create-admin": "node src/scripts/createAdmin.js",
+    "test:isolation": "node src/scripts/testIsolation.js",
+    "reset-demo": "node src/scripts/resetDemo.js",
+    "test:vault": "node src/scripts/testVault.js",
+    "test:fifo": "node src/scripts/testFifo.js",
+    "test": "node src/scripts/testVault.js && node src/scripts/testFifo.js && node src/scripts/testIsolation.js && node src/scripts/testMarket.js && node src/scripts/testScoring.js && node src/scripts/testAskData.js",
+    "test:market": "node src/scripts/testMarket.js",
+    "test:scoring": "node src/scripts/testScoring.js",
+    "test:askdata": "node src/scripts/testAskData.js",
+    "backup": "node -e \"require('./src/services/ops/backup').backupDatabase().then(r=>console.log(r.file))\"",
+    "scan": "node -e \"require('./src/services/universe/universeService').runScan({trigger:'cli'}).then(r=>console.log(JSON.stringify(r,null,2)))\""
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "sqlite3": "^5.1.7"
+  }
+}
