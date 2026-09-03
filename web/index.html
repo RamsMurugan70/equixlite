@@ -112,6 +112,14 @@
      transcribed exactly and a URL that runs off the edge of its box cannot be. */
   .redirect { border-top:1px solid var(--border); margin-top:10px; padding-top:10px;
     display:flex; flex-direction:column; gap:7px; }
+  /* What to do at the broker's own site, before any of this works. */
+  .steps { margin:6px 0 10px; padding-left:20px; font-size:.85rem; color:var(--text-2);
+    display:flex; flex-direction:column; gap:5px; }
+  .steps li { line-height:1.45; }
+  .tips { margin:6px 0 0; font-size:.85rem; }
+  .tips dt { font-weight:700; color:var(--text); margin-top:9px; }
+  .tips dd { margin:2px 0 0; color:var(--text-2); line-height:1.45; }
+
   .urlbox { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.82rem;
     background:var(--surface); border:1px solid var(--border-strong); border-radius:6px;
     padding:7px 10px; overflow-wrap:anywhere; flex:1 1 260px; user-select:all; }
@@ -239,28 +247,13 @@
 <div id="view-setup" class="center" hidden>
   <div class="card">
     <div class="brand"><span class="mark"><svg viewBox="0 0 64 64" aria-hidden="true"><g fill="#fff"><rect x="12" y="37" width="11.5" height="16" rx="5.75"/><rect x="26.25" y="27" width="11.5" height="26" rx="5.75"/><rect x="40.5" y="15" width="11.5" height="38" rx="5.75"/></g></svg></span><span class="n">EquixLite</span></div>
-    <h1>Set up your portfolios</h1>
+    <h1>Set up your accounts</h1>
     <p class="muted" style="margin:4px 0 16px">
-      You can have two. Name them however you think of them — one per broker account works well.
-      Connecting a broker comes later; you can add trades by hand in the meantime.
+      Up to three. Name each one however you think of it, and say which broker it is with —
+      one broker per account. You enter the API keys on the next screen.
     </p>
     <form id="f-setup">
-      <label>First portfolio<input name="name1" placeholder="e.g. ICICI" required maxlength="40"></label>
-      <label>Broker (optional)
-        <select name="broker1">
-          <option value="">Not connected yet</option>
-          <option value="icicidirect">ICICI Direct</option>
-          <option value="zerodha">Zerodha</option>
-        </select>
-      </label>
-      <label>Second portfolio (optional)<input name="name2" placeholder="e.g. Zerodha" maxlength="40"></label>
-      <label>Broker (optional)
-        <select name="broker2">
-          <option value="">Not connected yet</option>
-          <option value="icicidirect">ICICI Direct</option>
-          <option value="zerodha">Zerodha</option>
-        </select>
-      </label>
+      <div id="setup-rows"></div>
       <div id="setup-msg" class="msg err" hidden></div>
       <button type="submit">Create</button>
     </form>

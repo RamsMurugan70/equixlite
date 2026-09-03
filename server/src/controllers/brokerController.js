@@ -8,15 +8,23 @@ const repo = require('../repositories/portfolioRepository');
 const breeze = require('../services/broker/breezeClient');
 const kite = require('../services/broker/kiteClient');
 const { recordRun } = require('../services/imports/dailySyncService');
+const catalog = require('../services/broker/brokerCatalog');
 const { publicUrl } = require('../config/env');
 
 const CLIENTS = { icicidirect: breeze, zerodha: kite };
-const LABEL = { icicidirect: 'ICICI Direct', zerodha: 'Zerodha' };
+const LABEL = Object.fromEntries(catalog.list().map((b) => [b.broker, b.label]));
 
+// A broker in the catalog without a client is not an error in the user's input — it is a feature
+// this app has not built yet, and saying so is more useful than "unknown broker".
 function clientFor(broker) {
   const c = CLIENTS[broker];
   if (!c) {
-    throw Object.assign(new Error(`Unknown broker "${broker}".`), { code: 'BAD_BROKER' });
+    const known = catalog.get(broker);
+    throw Object.assign(
+      new Error(known
+        ? `Connecting to ${known.label} is not supported yet. Your saved key and secret are kept for when it is.`
+        : `Unknown broker "${broker}".`),
+      { code: 'BAD_BROKER' });
   }
   return c;
 }
@@ -43,7 +51,9 @@ async function status(req, res, next) {
     res.json({
       brokers: brokers.map((b) => ({
         ...b,
-        label: LABEL[b.broker],
+        // Everything the two setup screens need to describe this broker, so neither has to carry
+        // its own copy of what ICICI calls a secret or why Kotak has no Connect button.
+        ...catalog.get(b.broker),
         // Zerodha will only redirect to the URL registered in the user's own Kite Connect app,
         // and it has to match exactly. Handing them the string to copy is the difference
         // between one-click login working and a "redirect URL mismatch" they cannot diagnose.

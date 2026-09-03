@@ -19,7 +19,11 @@ const breeze = require('../broker/breezeClient');
 const kite = require('../broker/kiteClient');
 
 const CLIENTS = { icicidirect: breeze, zerodha: kite };
-const LABEL = { icicidirect: 'ICICI Direct', zerodha: 'Zerodha' };
+// From the catalog rather than a local copy: three separate hardcoded label maps had already
+// drifted by the time Kotak was added, and two of them silently labelled it "ICICI".
+const catalog = require('../broker/brokerCatalog');
+
+const LABEL = Object.fromEntries(catalog.list().map((b) => [b.broker, b.label]));
 
 const ist = () => new Date(Date.now() + 330 * 60000);
 const todayIst = () => ist().toISOString().slice(0, 10);
@@ -160,7 +164,8 @@ async function getStatus(userId, { sinceDays = 30 } = {}) {
       if (d.getUTCDay() === 0 || d.getUTCDay() === 6) continue;
       const ds = d.toISOString().slice(0, 10);
       if (!have.has(ds)) {
-        gaps.push({ portfolioId: c.portfolioId, portfolioName: c.portfolioName, broker: c.broker, date: ds });
+        gaps.push({ portfolioId: c.portfolioId, portfolioName: c.portfolioName,
+          broker: c.broker, label: c.label, date: ds });
       }
     }
   }

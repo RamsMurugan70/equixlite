@@ -9,7 +9,25 @@ const now = () => new Date().toISOString();
 
 // Two per user, per the product decision. Enforced here rather than only in the UI, because the
 // API is reachable without it.
-const MAX_PORTFOLIOS = 2;
+const MAX_PORTFOLIOS = 3;
+
+// One account per broker. Credentials are stored per (user, broker) and a fetch lands in "the
+// portfolio tagged with this broker" — so two portfolios on the same broker would send one
+// account's holdings into whichever was created first, silently and with no way to tell.
+const BROKERS = ['zerodha', 'icicidirect', 'kotak'];
+
+async function assertBrokerFree(db, uid, broker, exceptPortfolioId = null) {
+  if (!broker) return;
+  if (!BROKERS.includes(broker)) {
+    throw new Error(`Broker must be one of ${BROKERS.join(', ')}.`);
+  }
+  const rows = await db.all(
+    'SELECT id, name FROM portfolios WHERE user_id = ? AND broker = ?', [uid, broker]);
+  const clash = rows.find((r) => r.id !== exceptPortfolioId);
+  if (clash) {
+    throw new Error(`Your "${clash.name}" account already uses this broker. Each broker can be linked to one account.`);
+  }
+}
 
 async function listPortfolios(userId) {
   return withUserDatabase(userId, (db, uid) => db.all(
@@ -29,6 +47,7 @@ async function createPortfolio(userId, { name, broker = null, position = 0 }) {
     if (existing.some((p) => p.name.toLowerCase() === clean.toLowerCase())) {
       throw new Error(`You already have a portfolio called "${clean}".`);
     }
+    await assertBrokerFree(db, uid, broker);
     const res = await db.run(
       'INSERT INTO portfolios (user_id, name, broker, position, created_at) VALUES (?,?,?,?,?)',
       [uid, clean, broker, position, now()]);
@@ -50,10 +69,11 @@ async function renamePortfolio(userId, portfolioId, name) {
 }
 
 async function setBroker(userId, portfolioId, broker) {
-  if (broker && !['zerodha', 'icicidirect'].includes(broker)) {
-    throw new Error('Broker must be zerodha or icicidirect.');
+  if (broker && !BROKERS.includes(broker)) {
+    throw new Error(`Broker must be one of ${BROKERS.join(', ')}.`);
   }
   return withUserDatabase(userId, async (db, uid) => {
+    await assertBrokerFree(db, uid, broker, Number(portfolioId));
     const res = await db.run(
       'UPDATE portfolios SET broker = ? WHERE id = ? AND user_id = ?', [broker, portfolioId, uid]);
     if (!res.changes) throw new Error('No such portfolio.');
@@ -200,7 +220,7 @@ async function valueSeries(userId, { portfolioId = null, from = null, to = null 
 }
 
 module.exports = {
-  MAX_PORTFOLIOS,
+  MAX_PORTFOLIOS, BROKERS,
   listPortfolios, createPortfolio, renamePortfolio, setBroker,
   listOrders, countOrders, insertOrders,
   saveSnapshot, latestSnapshot, valueSeries,

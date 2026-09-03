@@ -12,11 +12,13 @@ const { withUserDatabase } = require('../db/tenantGuard');
 const vault = require('../services/security/vault');
 
 const now = () => new Date().toISOString();
-const BROKERS = ['zerodha', 'icicidirect'];
+// Kotak is here even though its session flow is not built: its key and secret can be stored and
+// encrypted like any other, and are read back once the connection is added. See brokerCatalog.js.
+const BROKERS = ['zerodha', 'icicidirect', 'kotak'];
 
 function assertBroker(broker) {
   if (!BROKERS.includes(broker)) {
-    throw Object.assign(new Error(`Unknown broker "${broker}". Use zerodha or icicidirect.`),
+    throw Object.assign(new Error(`Unknown broker "${broker}". Use one of ${BROKERS.join(', ')}.`),
       { code: 'BAD_BROKER' });
   }
 }

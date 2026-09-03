@@ -10,6 +10,7 @@ const actionQueue = require('../services/portfolio/actionQueueService');
 const performance = require('../services/portfolio/performanceService');
 const holdings = require('../services/portfolio/holdingsService');
 const pickerMatch = require('../services/recommendations/pickerMatchService');
+const brokerCatalog = require('../services/broker/brokerCatalog');
 const repo = require('../repositories/portfolioRepository');
 
 const USER_FIXABLE = new Set([
@@ -191,6 +192,9 @@ async function dashboard(req, res, next) {
       totals: overview.totals,
       portfolios: overview.portfolios.map((p) => ({
         ...p.portfolio,
+        // Named here so the page does not need its own broker-to-label table to put a badge on
+        // a card — the one it had was a two-way ternary that labelled Kotak "ICICI".
+        brokerLabel: p.portfolio.broker ? brokerCatalog.get(p.portfolio.broker)?.label : null,
         count: p.totals.count,
         invested: p.totals.invested,
         currentValue: p.totals.currentValue,

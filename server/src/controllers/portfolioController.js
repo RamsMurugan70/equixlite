@@ -8,7 +8,7 @@ const { withUserDatabase } = require('../db/tenantGuard');
 // A validation failure is the caller's problem (400); anything else is ours (500). Without this
 // split, asking for a portfolio you do not own returns "something went wrong on our side" —
 // both untrue and unhelpful.
-const CLIENT_ERROR = /^(No such portfolio|A portfolio name|You already have|You can have|Portfolio name|Broker must)/;
+const CLIENT_ERROR = /^(No such portfolio|A portfolio name|You already have|You can have|Portfolio name|Broker must|Your ")/;
 function fail(res, next, e) {
   if (CLIENT_ERROR.test(e.message)) return res.status(400).json({ error: e.message });
   return next(e);

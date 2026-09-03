@@ -129,7 +129,7 @@ async function renderDashboard(body) {
       const c = el('div', { className: 'card-mini' },
         el('div', { className: 'brow' },
           el('strong', {}, p.name),
-          p.broker ? el('span', { className: 'tag user' }, p.broker === 'zerodha' ? 'Zerodha' : 'ICICI') : ''),
+          p.broker ? el('span', { className: 'tag user' }, p.brokerLabel || p.broker) : ''),
         el('div', { className: 'v' }, p.count ? inr(p.currentValue || p.invested) : '—'));
       c.append(el('div', { className: 's' },
         p.count ? [`${p.count} holding(s) · `, signed(p.pnl)] : ['Nothing here yet']));
@@ -390,13 +390,12 @@ async function renderDailySync(body) {
       'A capture is one you triggered, from here or the Brokers tab — not a claim you actually '
       + 'traded that day. Zerodha in particular can only ever repair today, not a day you missed.'));
     gapsBox.append(table(['Date', 'Portfolio', 'Broker'],
-      d.gaps.map((g) => [g.date, g.portfolioName, LABEL_FOR_BROKER[g.broker] || g.broker])));
+      d.gaps.map((g) => [g.date, g.portfolioName, g.label || g.broker])));
   }
   nodes.push(gapsBox);
 
   body.replaceChildren(...nodes);
 }
-const LABEL_FOR_BROKER = { icicidirect: 'ICICI Direct', zerodha: 'Zerodha' };
 
 // ── recommendations: your trades vs the top 25 ─────────────────────────────
 function pmStat(label, s) {

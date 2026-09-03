@@ -63,7 +63,13 @@ async function boot() {
 
   const p = await api('/api/portfolios');
   portfolios = p.portfolios;
-  if (!p.setupComplete) return show('view-setup');
+  if (!p.setupComplete) {
+    // The broker list is the server's to state, not the page's to assume.
+    const cat = await api('/api/brokers/status').catch(() => ({ brokers: [] }));
+    setupBrokers = cat.brokers.map((b) => ({ broker: b.broker, label: b.label }));
+    renderSetupRows();
+    return show('view-setup');
+  }
 
   current = current && portfolios.some((x) => x.id === current) ? current : portfolios[0].id;
   show('view-app');
@@ -72,6 +78,43 @@ async function boot() {
 }
 
 // ── setup wizard ─────────────────────────────────────────────────────────────
+// Up to three accounts, one broker each. The rows are built here rather than in the HTML so the
+// broker list comes from the server's catalog — the page never hard-codes which brokers exist —
+// and so a broker chosen in one row disappears from the others. Offering a duplicate the server
+// will refuse is a worse experience than not offering it.
+const SETUP_ROWS = 3;
+let setupBrokers = [];   // [{ broker, label }], from the server
+
+function renderSetupRows() {
+  const chosen = [...document.querySelectorAll('#setup-rows select')].map((s) => s.value);
+  const box = $('#setup-rows');
+  const rows = [];
+
+  for (let i = 0; i < SETUP_ROWS; i += 1) {
+    const mine = chosen[i] || '';
+    const opts = [el('option', { value: '', textContent: 'No broker / add trades by hand', selected: !mine })];
+    for (const b of setupBrokers) {
+      // Taken by another row, so not offered here.
+      if (chosen.includes(b.broker) && b.broker !== mine) continue;
+      opts.push(el('option', { value: b.broker, textContent: b.label, selected: b.broker === mine }));
+    }
+    const sel = el('select', { name: `broker${i}` }, opts);
+    sel.onchange = renderSetupRows;
+
+    rows.push(el('label', {},
+      i === 0 ? 'First account' : `Account ${i + 1} (optional)`,
+      el('input', {
+        name: `name${i}`,
+        placeholder: i === 0 ? 'e.g. Rams' : 'e.g. Geetha',
+        maxLength: 40,
+        required: i === 0,
+        value: (box.querySelector(`[name=name${i}]`) || {}).value || '',
+      })));
+    rows.push(el('label', {}, 'Broker', sel));
+  }
+  box.replaceChildren(...rows);
+}
+
 $('#f-setup').addEventListener('submit', async (e) => {
   e.preventDefault();
   const btn = e.target.querySelector('button[type=submit]');
@@ -79,12 +122,17 @@ $('#f-setup').addEventListener('submit', async (e) => {
   msg($('#setup-msg'), '');
   const f = new FormData(e.target);
   try {
-    // Two portfolios, per the product decision. The second is optional here so someone with one
-    // account is not forced to invent a name for a book they do not have.
-    await api('/api/portfolios', { method: 'POST', body: { name: f.get('name1'), broker: f.get('broker1') || null } });
-    if (String(f.get('name2') || '').trim()) {
-      await api('/api/portfolios', { method: 'POST', body: { name: f.get('name2'), broker: f.get('broker2') || null } });
+    let made = 0;
+    for (let i = 0; i < SETUP_ROWS; i += 1) {
+      const name = String(f.get(`name${i}`) || '').trim();
+      if (!name) continue;
+      await api('/api/portfolios', { method: 'POST', body: { name, broker: f.get(`broker${i}`) || null } });
+      made += 1;
     }
+    if (!made) throw new Error('Give at least the first account a name.');
+    // Straight to Brokers: the accounts exist but none can pull data until its keys are in, and
+    // that is the next thing to do rather than something to go looking for.
+    activeTab = 'brokers';
     await boot();
   } catch (err) { msg($('#setup-msg'), err.message); }
   finally { btn.disabled = false; }
@@ -269,9 +317,12 @@ async function renderBrokers(body) {
     const card = el('div', { className: 'bcard' });
     const head = el('div', { className: 'brow' },
       el('strong', {}, b.label),
+      // "Not connected today" is a prompt to go and log in. For a broker this app cannot connect
+      // to at all, that reads as a failure the user could fix, so it says what is actually true.
       b.configured
-        ? el('span', { className: 'tag ' + (b.connected ? 'src-orders' : 'pend') },
-          b.connected ? 'Connected' : 'Not connected today')
+        ? el('span', {
+          className: 'tag ' + (b.connected ? 'src-orders' : (b.connectable === false ? 'user' : 'pend')),
+        }, b.connected ? 'Connected' : (b.connectable === false ? 'Keys saved' : 'Not connected today'))
         : el('span', { className: 'tag user' }, 'No keys yet'));
     if (b.portfolio) head.append(el('span', { className: 'muted' }, '\u2192 ' + b.portfolio.name));
     card.append(head);
@@ -287,7 +338,22 @@ async function renderBrokers(body) {
         + (b.connected ? ' \u00b7 session until ' + fmtDate(b.sessionExpiresAt) : '')));
     }
 
-    if (b.configured) {
+    if (b.dailyNote) card.append(el('p', { className: 'muted small' }, b.dailyNote));
+
+    // A broker whose credentials this app can hold but whose session it cannot yet establish
+    // gets no Connect button — offering one that is guaranteed to fail is worse than saying so.
+    if (b.configured && b.connectable === false) {
+      card.append(el('div', { className: 'msg warn' },
+        `Connecting to ${b.label} is not supported yet. Your key and secret are saved and `
+        + 'encrypted; add this account\'s trades by hand on the Orders tab in the meantime.'));
+      const forgetOnly = el('button', { className: 'danger sm', textContent: 'Remove keys' });
+      forgetOnly.onclick = async () => {
+        if (!confirm('Remove your ' + b.label + ' key and secret? You will need to enter them again.')) return;
+        await api('/api/brokers/' + b.broker, { method: 'DELETE' });
+        openTab('brokers');
+      };
+      card.append(el('div', { className: 'row' }, forgetOnly));
+    } else if (b.configured) {
       const out = el('div', { className: 'msg', hidden: true });
       const actions = el('div', { className: 'row' });
 
@@ -345,8 +411,10 @@ async function renderBrokers(body) {
     }
 
     const keyOut = el('div', { className: 'msg', hidden: true });
-    const k = el('input', { placeholder: 'API key', autocomplete: 'off' });
-    const sec = el('input', { placeholder: 'API secret', type: 'password', autocomplete: 'off' });
+    // Each broker's own name for its credentials. "Consumer Key" is what Kotak shows you; being
+    // told to paste an "API key" sends people looking for a field that does not exist.
+    const k = el('input', { placeholder: b.keyLabel || 'API key', autocomplete: 'off' });
+    const sec = el('input', { placeholder: b.secretLabel || 'API secret', type: 'password', autocomplete: 'off' });
     const save = el('button', {
       className: b.configured ? 'ghost' : '',
       textContent: b.configured ? 'Replace keys' : 'Save keys',
@@ -360,11 +428,31 @@ async function renderBrokers(body) {
         { apiKey: k.value.trim(), apiSecret: sec.value.trim() },
         () => 'Saved.', () => openTab('brokers'));
     };
-    const keyPanel = el('details', { className: 'keys' },
-      el('summary', {}, b.configured ? 'Replace API key and secret' : 'Add your API key and secret'),
-      el('p', { className: 'muted' },
-        'From your own ' + b.label + " developer app. Replacing them signs you out of today's session."),
-      el('div', { className: 'row' }, k, sec, save), keyOut);
+    const keyPanel = el('details', {
+      className: 'keys',
+      // Open by default when there is nothing saved yet: on a fresh account this panel IS the
+      // task, and a collapsed summary reads as though setup is already done.
+      open: !b.configured,
+    },
+    el('summary', {}, b.configured
+      ? `Replace ${b.keyLabel || 'API key'} and ${b.secretLabel || 'secret'}`
+      : `Add your ${b.label} ${b.keyLabel || 'API key'} and ${b.secretLabel || 'secret'}`));
+
+    // Where these come from, at the broker, before anything here works.
+    if (b.setupSteps?.length) {
+      keyPanel.append(el('ol', { className: 'steps' },
+        b.setupSteps.map((s) => el('li', {}, s))));
+    }
+    if (b.portalUrl) {
+      keyPanel.append(el('p', { className: 'muted small' },
+        el('a', { href: b.portalUrl, target: '_blank', rel: 'noopener noreferrer' },
+          `Open ${b.label}'s developer portal →`)));
+    }
+    if (b.configured) {
+      keyPanel.append(el('p', { className: 'muted small' },
+        "Replacing these signs you out of today's session."));
+    }
+    keyPanel.append(el('div', { className: 'row' }, k, sec, save), keyOut);
 
     // Zerodha will only redirect back to the URL registered in the user's own Kite app, and it
     // must match character for character. Showing it here, with a copy button, is the whole
@@ -394,6 +482,14 @@ async function renderBrokers(body) {
           el('code', { className: 'urlbox' }, b.redirectUrl), copy)));
     }
     card.append(keyPanel);
+
+    // Troubleshooting, next to the thing that is failing rather than in a manual somewhere.
+    if (b.tips?.length) {
+      card.append(el('details', { className: 'keys' },
+        el('summary', {}, `${b.label} — when it will not connect`),
+        el('dl', { className: 'tips' },
+          b.tips.flatMap(([symptom, fix]) => [el('dt', {}, symptom), el('dd', {}, fix)]))));
+    }
 
     nodes.push(card);
   }
