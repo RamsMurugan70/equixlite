@@ -50,10 +50,14 @@ app.use('/api/brokers', require('./routes/brokerRoutes'));
 
 // Everything a signed-in user's own pages need. Guarded here rather than inside the router, so
 // the routes file cannot accidentally expose one: requireAuth wraps the whole mount.
+// requireTrader marks the routes an admin account has no business reaching — it has no
+// portfolio. The two routers mounted on bare '/api' apply it PER ROUTE rather than at the mount:
+// mount middleware runs for every request under the prefix, matched or not, so putting it here
+// would also have blocked /api/recommendations/scan, which is the one thing an admin does need.
 app.use('/api', auth.requireAuth, require('./routes/portfolioRoutes'));
 app.use('/api', auth.requireAuth, require('./routes/marketRoutes'));
-app.use('/api/daily-sync', auth.requireAuth, require('./routes/dailySyncRoutes'));
-app.use('/api/ask-data', auth.requireAuth, require('./routes/askDataRoutes'));
+app.use('/api/daily-sync', auth.requireAuth, auth.requireTrader, require('./routes/dailySyncRoutes'));
+app.use('/api/ask-data', auth.requireAuth, auth.requireTrader, require('./routes/askDataRoutes'));
 
 // DEFAULT DENY. Anything under /api that was not matched above needs a session. A route file
 // added later is therefore protected before its author thinks about it, and the failure mode of

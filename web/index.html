@@ -75,7 +75,9 @@
   main { max-width:1080px; margin:0 auto; padding:22px; display:flex; flex-direction:column; gap:18px; }
   .panel { background:var(--surface); border:1px solid var(--border); border-radius:10px;
     padding:18px 20px; display:flex; flex-direction:column; gap:14px; }
-  .row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
+  /* flex-direction is stated, not left to default: on a <form class="row"> the form rule's
+     column direction would otherwise win and stack the fields down the right-hand edge. */
+  .row { display:flex; flex-direction:row; gap:10px; align-items:flex-end; flex-wrap:wrap; }
   .row label { flex:1 1 170px; }
   .toolbar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
   #pf-select { width:auto; min-width:170px; }
@@ -277,7 +279,6 @@
     <span class="brand" style="margin:0"><span class="mark"><svg viewBox="0 0 64 64" aria-hidden="true"><g fill="#fff"><rect x="12" y="37" width="11.5" height="16" rx="5.75"/><rect x="26.25" y="27" width="11.5" height="26" rx="5.75"/><rect x="40.5" y="15" width="11.5" height="38" rx="5.75"/></g></svg></span><span class="n">EquixLite</span></span>
     <span class="spacer"></span>
     <span class="muted" id="who"></span>
-    <button class="ghost sm" id="nav-admin" hidden>People</button>
     <button class="ghost sm" id="btn-password">Password</button>
     <button class="ghost sm" id="btn-logout">Sign out</button>
   </header>
@@ -299,9 +300,20 @@
       </form>
       <div id="admin-msg" class="msg" hidden></div>
       <div class="tw" id="admin-users"></div>
+
+      <!-- The market scan is shared data and admin-triggered, so it lives on the admin page
+           rather than on a trading tab an admin cannot reach. -->
+      <div class="panel-inset" id="admin-scan">
+        <h3>Market data</h3>
+        <p class="muted small" id="scan-state">Checking…</p>
+        <div class="row">
+          <button class="ghost sm" id="btn-scan" type="button">Run scan now</button>
+        </div>
+        <div id="scan-msg" class="msg" hidden></div>
+      </div>
     </div>
 
-    <div class="panel">
+    <div class="panel" id="app-panel">
       <div class="toolbar">
         <h2 id="panel-title">Dashboard</h2>
         <span id="pf-picker" hidden>

@@ -83,6 +83,33 @@ async function main() {
     check('B keeps zerodha even though A has it too', free.broker === 'zerodha');
   }
 
+  console.log('\nAdmin manages people; it does not trade');
+  {
+    // The middleware directly, with stand-in req/res — the boundary is a role check, and a
+    // hidden UI over an open API was the thing this is meant to rule out.
+    const { requireTrader, requireAdmin } = require('../middleware/auth');
+    const run = (mw, user) => new Promise((resolve) => {
+      const req = { user };
+      const res = { status(c) { this.code = c; return this; }, json(b) { resolve({ code: this.code, body: b }); } };
+      mw(req, res, () => resolve({ code: 200, body: null }));
+    });
+
+    const adminUser = { id: 1, role: 'admin' };
+    const plainUser = { id: 2, role: 'user' };
+
+    const t1 = await run(requireTrader, adminUser);
+    check('an admin is refused a trading route', t1.code === 403, JSON.stringify(t1));
+    check('and told what to do instead', /user account for your own trading/.test(t1.body?.error || ''),
+      t1.body?.error);
+
+    check('a user passes a trading route', (await run(requireTrader, plainUser)).code === 200);
+    check('signed out is 401, not 403', (await run(requireTrader, null)).code === 401);
+
+    check('an admin passes an admin route', (await run(requireAdmin, adminUser)).code === 200);
+    // 404 rather than 403, so a non-admin does not learn the admin API is there.
+    check('a user gets 404 on an admin route', (await run(requireAdmin, plainUser)).code === 404);
+  }
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   process.exit(failed ? 1 : 0);
 }

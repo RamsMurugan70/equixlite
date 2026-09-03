@@ -100,8 +100,19 @@ async function boot() {
   }
 
   $('#who').textContent = `${user.displayName} · ${user.loginId}`;
-  const isAdmin = user.role === 'admin';
-  $('#nav-admin').hidden = !isAdmin;
+
+  // An admin account manages people and does not trade — see requireTrader in middleware/auth.js.
+  // It gets the People page and nothing else: no accounts to pick between, no tabs to open, and
+  // the API would refuse them anyway. To use the app, an admin issues themselves a user login.
+  if (user.role === 'admin') {
+    $('#admin-panel').hidden = false;
+    $('#app-panel').hidden = true;
+    show('view-app');
+    await loadAdmin();
+    return loadScanState();
+  }
+  $('#admin-panel').hidden = true;
+  $('#app-panel').hidden = false;
 
   const p = await api('/api/portfolios');
   portfolios = p.portfolios;
@@ -653,7 +664,47 @@ $('#btn-password').onclick = () => {
   show('view-change');
 };
 $('#change-cancel').onclick = () => show('view-app');
-$('#nav-admin').onclick = () => { $('#admin-panel').hidden = !$('#admin-panel').hidden; if (!$('#admin-panel').hidden) loadAdmin(); };
+// ── admin: market scan ───────────────────────────────────────────────────────
+// The one shared-data job an admin still runs. The Top 25 is empty until it has been done once,
+// and the scheduler will not fire until 18:00 IST, so a first run has to be startable by hand.
+async function loadScanState() {
+  const state = $('#scan-state');
+  const btn = $('#btn-scan');
+  try {
+    const s = await api('/api/recommendations/scan');
+    if (s.running) {
+      state.textContent = `Scan running — ${s.done} of ${s.total} symbols (${s.scored} scored`
+        + `${s.failed ? `, ${s.failed} skipped` : ''}).`;
+      btn.disabled = true;
+      btn.textContent = 'Scanning…';
+      // Only while one is actually running, so a finished scan stops the polling with it.
+      setTimeout(loadScanState, 4000);
+      return;
+    }
+    btn.disabled = false;
+    btn.textContent = 'Run scan now';
+    // `history` comes from the stored scans; `scanDate` is only in memory and resets with the
+    // process, so a restarted server would otherwise claim no scan had ever run.
+    const last = s.history?.[0]?.scan_date;
+    state.textContent = last
+      ? `Last scan ${last}${s.scanDate === last ? ` — ${s.scored} scored, ${s.failed} skipped` : ''}. `
+        + 'Runs on its own at 18:00 IST on weekdays.'
+      : 'No scan has run yet. The Top 25 stays empty until one has, so run the first by hand.';
+  } catch (e) {
+    state.textContent = `Could not read scan status: ${e.message}`;
+  }
+}
+
+$('#btn-scan').onclick = async () => {
+  const btn = $('#btn-scan');
+  btn.disabled = true;
+  msg($('#scan-msg'), '');
+  try {
+    await api('/api/recommendations/scan', { method: 'POST', body: {} });
+    msg($('#scan-msg'), 'Started. Five hundred symbols takes a couple of minutes.', 'ok');
+  } catch (e) { msg($('#scan-msg'), e.message, 'err'); btn.disabled = false; }
+  loadScanState();
+};
 
 async function loadAdmin() {
   const { users } = await api('/api/admin/users');

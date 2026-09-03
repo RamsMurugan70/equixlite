@@ -13,7 +13,7 @@ more duplication, far less risk to the thing that already works.
 
 | Decision | Value |
 |---|---|
-| Users | A handful, known personally. No self-signup — the admin issues credentials. |
+| Users | A handful, known personally. No self-signup — the admin issues credentials. An admin account manages people only; it holds no portfolio. |
 | Portfolios | Three per user, at most one per broker. |
 | Broker connect | Each user supplies their own API keys. ICICI Direct and Zerodha connect; Kotak Neo stores keys but has no session flow yet. CSV import is the fallback. |
 | Database | SQLite, its own file at `data/equixlite.db`. Fresh — no desktop data is copied. |
@@ -67,10 +67,10 @@ shares the scan lock and two scans cannot race. `GET /api/admin/ops` reports wha
 cd server && npm test
 ```
 
-211 assertions, no network required: the vault's crypto, FIFO lot matching against hand-worked
+217 assertions, no network required: the vault's crypto, FIFO lot matching against hand-worked
 tax cases, tenant isolation at the data level, the indicators and GARCH against synthetic data
 with known parameters, the scoring port at every threshold boundary, Ask the Data's query
-scoping, and the account rules (three per user, one broker each).
+scoping, the account rules (three per user, one broker each), and the admin/trader boundary.
 
 ## Running it
 

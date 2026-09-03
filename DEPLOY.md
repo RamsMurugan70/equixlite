@@ -113,12 +113,16 @@ docker compose exec equixlite node server/src/scripts/createAdmin.js
 It prints a one-time password. Sign in at `https://equixlite.yourdomain.com` and change it
 immediately — the app forces this on first login anyway.
 
+**An admin account manages people and does not trade.** It sees the People page and nothing
+else, and the API refuses it a portfolio. To use the app yourself, issue yourself an ordinary
+user account from that page and sign in with that instead.
+
 ---
 
 ## 6. Seed the market data
 
 The Top 25 is empty until a scan has run, and the scheduler will not fire until 18:00 IST. Kick
-the first one off from the **Top 25** tab (**Run scan**), or:
+the first one off with **Run scan now**, under Market data on the admin page, or:
 
 ```bash
 docker compose exec equixlite node -e "require('./server/src/services/universe/universeService').runScan({trigger:'first-boot'}).then(r=>console.log(r))"
@@ -130,8 +134,8 @@ Roughly two minutes for 500 symbols.
 
 ## Adding a user
 
-**People** in the header → **Create account**. You get a one-time password to pass on; they are
-forced to change it at first login.
+Sign in as an admin — the People page is the whole screen — and use **Create account**. You get
+a one-time password to pass on; they are forced to change it at first login.
 
 Each user brings their own broker API keys. Point them at the **Brokers** tab, and tell them:
 

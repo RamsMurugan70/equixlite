@@ -1,6 +1,6 @@
 const express = require('express');
 const c = require('../controllers/brokerController');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireTrader } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -10,8 +10,9 @@ const router = express.Router();
 // as a crash. `attachUser` has already run app-wide, so req.user is populated either way.
 router.get('/:broker/callback', c.callback);
 
-// Everything else is a normal authenticated API call.
-router.use(requireAuth);
+// Everything else is a normal authenticated API call, and belongs to a trading account — an
+// admin login has no portfolio for a broker to be connected to.
+router.use(requireAuth, requireTrader);
 
 router.get   ('/status',            c.status);
 router.post  ('/:broker/keys',      c.saveKeys);

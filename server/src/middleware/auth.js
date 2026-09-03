@@ -60,6 +60,24 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// The mirror of requireAdmin: an admin login manages people, and does not trade.
+//
+// The separation is the point. An admin who also held portfolios would be one login doing two
+// unrelated jobs, and the person running this is expected to issue themselves an ordinary user
+// account for their own trading. Enforced here rather than only hidden in the page, because a
+// hidden UI over an open API leaves portfolio rows that exist and have no screen to show them.
+function requireTrader(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Sign in to continue.' });
+  if (req.user.role === 'admin') {
+    return res.status(403).json({
+      error: 'An admin account manages people, not portfolios. Create a user account for your '
+        + 'own trading and sign in with that.',
+      code: 'ADMIN_NOT_TRADER',
+    });
+  }
+  next();
+}
+
 function requireAdmin(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'Sign in to continue.' });
   if (req.user.role !== 'admin') {
@@ -110,7 +128,7 @@ function clearFailedLogins(req) {
 }
 
 module.exports = {
-  cookieParser, attachUser, requireAuth, requireAdmin,
+  cookieParser, attachUser, requireAuth, requireAdmin, requireTrader,
   setSessionCookie, clearSessionCookie, readSessionId,
   loginRateLimit, noteFailedLogin, clearFailedLogins,
 };
