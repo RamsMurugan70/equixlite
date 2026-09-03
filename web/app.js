@@ -27,6 +27,48 @@ function show(view) {
     $(`#${id}`).hidden = id !== view;
   }
 }
+// ── password reveal ──────────────────────────────────────────────────────────
+// A password typed blind and rejected tells you nothing about which half went wrong — the
+// password or the caps lock. Every password field gets a toggle, including the ones built in JS
+// for broker secrets, which is why this is applied by scanning rather than per-field.
+const EYE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 6.1A9.9 9.9 0 0 1 12 5.5c6.4 0 10 6.5 10 6.5a17 17 0 0 1-3.6 4.3M6.3 7.8A17 17 0 0 0 2 12s3.6 6.5 10 6.5a9.7 9.7 0 0 0 3.7-.7"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+
+function addPeek(input) {
+  if (!input || input.dataset.peek) return;
+  input.dataset.peek = '1';
+
+  const wrap = el('div', { className: 'pwrap' });
+  input.parentNode.insertBefore(wrap, input);
+  wrap.append(input);
+
+  const btn = el('button', { type: 'button', className: 'peek' });
+  const paint = () => {
+    const shown = input.type === 'text';
+    btn.innerHTML = shown ? EYE_OFF : EYE;
+    // Named for what pressing it does, not for the state it is in — a screen reader announcing
+    // "password shown" on a button that hides it is the wrong way round.
+    btn.title = shown ? 'Hide password' : 'Show password';
+    btn.setAttribute('aria-label', btn.title);
+    btn.setAttribute('aria-pressed', String(shown));
+  };
+  btn.onclick = () => {
+    input.type = input.type === 'password' ? 'text' : 'password';
+    paint();
+    // Focus back where they were typing, at the end, rather than leaving it on the button.
+    input.focus();
+    const n = input.value.length;
+    try { input.setSelectionRange(n, n); } catch { /* not all input types support it */ }
+  };
+  paint();
+  wrap.append(btn);
+}
+
+/** Applies the toggle to every password field currently on the page. Safe to call repeatedly. */
+function addPeeks(root = document) {
+  root.querySelectorAll('input[type=password]').forEach(addPeek);
+}
+
 function msg(node, text, kind = 'err') {
   node.className = `msg ${kind}`;
   node.textContent = text;
@@ -453,6 +495,9 @@ async function renderBrokers(body) {
         "Replacing these signs you out of today's session."));
     }
     keyPanel.append(el('div', { className: 'row' }, k, sec, save), keyOut);
+    // The secret is long, pasted, and rejected silently when it is wrong — worth being able to
+    // see. Applied after it is in the tree, since the toggle wraps the field in place.
+    addPeek(sec);
 
     // Zerodha will only redirect back to the URL registered in the user's own Kite app, and it
     // must match character for character. Showing it here, with a copy button, is the whole
@@ -662,4 +707,5 @@ $('#f-create').addEventListener('submit', async (e) => {
   } catch (err) { msg($('#admin-msg'), err.message); }
 });
 
+addPeeks();
 boot().catch(() => show('view-login'));
