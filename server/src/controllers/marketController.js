@@ -11,6 +11,7 @@ const performance = require('../services/portfolio/performanceService');
 const holdings = require('../services/portfolio/holdingsService');
 const pickerMatch = require('../services/recommendations/pickerMatchService');
 const brokerCatalog = require('../services/broker/brokerCatalog');
+const decisionReview = require('../services/portfolio/decisionReviewService');
 const repo = require('../repositories/portfolioRepository');
 
 const USER_FIXABLE = new Set([
@@ -121,6 +122,16 @@ async function untrackedHoldingsView(req, res, next) {
   } catch (e) { return fail(res, next, e); }
 }
 
+// ── Decision Review: was that buy or sell a good call? ──────────────────────
+async function decisionReviewView(req, res, next) {
+  try {
+    const window = ['3M', '6M', '1Y', 'ALL'].includes(req.query.window) ? req.query.window : '6M';
+    const portfolioId = req.query.portfolioId ? Number(req.query.portfolioId) : null;
+    if (portfolioId) await requirePortfolio(req.user.id, portfolioId);
+    res.json(await decisionReview.decisionReview(req.user.id, { window, portfolioId }));
+  } catch (e) { return fail(res, next, e); }
+}
+
 // ── Action Queue ─────────────────────────────────────────────────────────────
 async function actionQueueView(req, res, next) {
   try {
@@ -220,6 +231,6 @@ async function dashboard(req, res, next) {
 
 module.exports = {
   topPicks, scanStatus, startScan, stockProfile, symbolSearch,
-  portfolioHealth, actionQueueView, pickerMatchesView, untrackedHoldingsView,
+  portfolioHealth, actionQueueView, pickerMatchesView, untrackedHoldingsView, decisionReviewView,
   performanceView, dashboard,
 };

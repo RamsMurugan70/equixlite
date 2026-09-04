@@ -34,7 +34,7 @@ server/
       broker/     Breeze (ICICI) and Kite (Zerodha) clients
       market/     Yahoo client, indicators, GARCH, Stock Sleuth
       ops/        nightly scheduler, database backups
-      portfolio/  FIFO, holdings, health, performance
+      portfolio/  FIFO, holdings, health, performance, decision review
       scoring/    the 0-100 health score
       universe/   the NIFTY 500 scan and the Top 25
     controllers/  request handling

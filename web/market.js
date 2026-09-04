@@ -660,6 +660,10 @@ async function renderPerformance(body) {
       `${p.unpricedCount} holding(s) could not be priced, so the unrealised figure excludes them.`));
   }
 
+  // How the portfolio did, then how the individual calls did. Same page, because "am I ahead"
+  // and "am I any good at this" are the same question asked at two different resolutions.
+  nodes.push(await renderDecisionReview());
+
   nodes.push(table(
     ['Symbol', 'Qty', 'Invested', 'Value', 'Unrealised', 'Realised', 'Total', ''],
     p.rows.map((r) => [
@@ -1124,4 +1128,89 @@ function logIdeaForm() {
       'A tip you were given, or your own thesis. Entry, target and stop-loss are optional — '
       + 'without them the idea is still tracked, just never marked as hit or stopped.'),
     rows, el('div', { className: 'row' }, save), out);
+}
+
+// ── decision review ──────────────────────────────────────────────────────────
+// P&L says whether a position made money; this says whether the DECISION was good. Every trade
+// is measured against the NIFTY 50 over its own holding period, and a sale scores well when what
+// you sold went on to lag the index.
+
+let reviewWindow = '6M';
+
+function alphaCell(v) {
+  if (v === null || v === undefined) return el('span', { className: 'muted' }, '—');
+  return el('span', { className: v >= 0 ? 'pos' : 'neg' }, `${v >= 0 ? '+' : ''}${v}%`);
+}
+
+function decisionStat(label, b, helper) {
+  return stat(label, b.goodRate === null ? '—' : `${b.goodRate}%`,
+    b.count ? `${b.scored} of ${b.count} ${helper}` : 'none');
+}
+
+async function renderDecisionReview(host) {
+  const d = await api(`/api/decision-review?window=${reviewWindow}`);
+  const box = el('div', { className: 'panel-inset' });
+
+  const sel = el('select', { className: 'sm' }, ['3M', '6M', '1Y', 'ALL'].map((w) =>
+    el('option', { value: w, textContent: w === 'ALL' ? 'All time' : w, selected: w === reviewWindow })));
+  sel.onchange = async () => {
+    reviewWindow = sel.value;
+    const fresh = await renderDecisionReview(host);
+    box.replaceWith(fresh);
+  };
+
+  box.append(el('div', { className: 'brow' },
+    el('h3', {}, 'Decision review'),
+    el('span', { className: 'spacer', style: 'flex:1' }),
+    el('span', { className: 'muted small' }, 'vs '),
+    sel));
+
+  if (!d.orders.length) {
+    box.append(el('p', { className: 'muted' }, d.message || 'No trades in this window.'));
+    return box;
+  }
+
+  const s = d.summary;
+  box.append(el('div', { className: 'stats' },
+    decisionStat('Good calls', s.all, 'measurable'),
+    decisionStat('Buys', s.buys, 'measurable'),
+    decisionStat('Sells', s.sells, 'measurable'),
+    stat('Avg vs index', s.all.avgAlphaPct === null ? '—' : `${s.all.avgAlphaPct >= 0 ? '+' : ''}${s.all.avgAlphaPct}%`,
+      'across every trade')));
+
+  if (s.best || s.worst) {
+    const line = (label, o) => (o
+      ? el('li', {},
+        el('span', { className: 'tag user' }, label),
+        ` ${o.side} ${o.symbol} on ${o.tradeDate} — `,
+        alphaCell(o.decisionAlphaPct), ' vs the index')
+      : '');
+    box.append(el('ul', { className: 'concerns' }, [line('Best', s.best), line('Worst', s.worst)]));
+  }
+
+  box.append(table(
+    ['Date', 'Trade', 'Symbol', 'Dealt at', 'Now', 'Since', 'Index', 'vs Index', 'Verdict'],
+    d.orders.map((o) => [
+      o.tradeDate,
+      el('span', { className: o.side === 'BUY' ? 'pos' : 'neg' }, o.side),
+      symbolLink(o.symbol),
+      o.price ?? '—',
+      o.now ?? '—',
+      o.movePct === null ? '—'
+        : el('span', { className: o.movePct >= 0 ? 'pos' : 'neg' },
+          `${o.movePct >= 0 ? '+' : ''}${o.movePct}%`),
+      o.indexMovePct === null ? '—' : `${o.indexMovePct >= 0 ? '+' : ''}${o.indexMovePct}%`,
+      alphaCell(o.decisionAlphaPct),
+      o.good === null
+        ? el('span', { className: 'muted', title: 'No price history reaching back to this trade' }, 'not measurable')
+        : el('span', { className: `tag ${o.good ? 'src-orders' : 'off'}` },
+          o.good ? (o.side === 'BUY' ? 'beat the index' : 'well timed') : (o.side === 'BUY' ? 'lagged' : 'early')),
+    ])));
+
+  box.append(el('p', { className: 'muted small' }, d.caveat));
+  if (s.unmeasurable) {
+    box.append(el('p', { className: 'muted small' },
+      `${s.unmeasurable} trade(s) predate the price history on hand, so they are listed without a verdict.`));
+  }
+  return box;
 }

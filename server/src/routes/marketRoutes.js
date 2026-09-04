@@ -28,5 +28,6 @@ router.get('/stocks/:symbol', requireTrader, c.stockProfile);
 router.get('/portfolio/health', requireTrader, c.portfolioHealth);
 router.get('/action-queue', requireTrader, c.actionQueueView);
 router.get('/performance', requireTrader, c.performanceView);
+router.get('/decision-review', requireTrader, c.decisionReviewView);
 
 module.exports = router;
