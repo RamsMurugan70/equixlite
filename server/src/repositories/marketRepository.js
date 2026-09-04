@@ -166,6 +166,45 @@ async function topAppearances(universe, symbols, fromDate, toDate) {
     [universe, ...symbols, fromDate, toDate]));
 }
 
+/**
+ * One stock's history in one index: where it ranked, and whether it made the Top 25.
+ *
+ * TWO SOURCES, UNIONED BY DATE, because they cover different spans. `universe_scores` carries the
+ * full detail but only for days this app scanned itself; `universe_top_daily` carries just the
+ * ranking and goes back through everything imported from the desktop app. A stock can therefore
+ * be known to have been 8th on a day whose scores were never stored, and saying "not in the top
+ * 25" for that day because the scores are missing would be wrong.
+ *
+ * The rank within the index is DERIVED rather than read. universe_scores.uni_rank is never
+ * written by this app's scanner — ranking happens after the rows are saved — so it is computed
+ * here the only way that is correct: how many symbols outscored it on that date.
+ */
+async function stockScanHistory(universe, symbol, days = 60) {
+  const sym = String(symbol || '').toUpperCase();
+  return withSharedDatabase((db) => db.all(
+    `WITH dates AS (
+       SELECT scan_date FROM universe_scores     WHERE universe = ? AND symbol = ?
+       UNION
+       SELECT scan_date FROM universe_top_daily  WHERE universe = ? AND symbol = ?
+     )
+     SELECT d.scan_date,
+            t.rank  AS top25_rank,
+            s.combined_score, s.technical_score, s.momentum_score, s.rsi,
+            s.r1w, s.r1m, s.r3m, s.r6m, s.name, s.industry, s.detail_json,
+            (SELECT COUNT(*) + 1 FROM universe_scores x
+              WHERE x.universe = ? AND x.scan_date = d.scan_date
+                AND x.combined_score > s.combined_score)                AS uni_rank,
+            (SELECT COUNT(*) FROM universe_scores x
+              WHERE x.universe = ? AND x.scan_date = d.scan_date
+                AND x.combined_score IS NOT NULL)                       AS uni_total
+       FROM dates d
+       LEFT JOIN universe_scores    s ON s.universe = ? AND s.scan_date = d.scan_date AND s.symbol = ?
+       LEFT JOIN universe_top_daily t ON t.universe = ? AND t.scan_date = d.scan_date AND t.symbol = ?
+      ORDER BY d.scan_date DESC
+      LIMIT ?`,
+    [universe, sym, universe, sym, universe, universe, universe, sym, universe, sym, days]));
+}
+
 // ── Fundamentals ─────────────────────────────────────────────────────────────
 async function getFundamentals(symbol, maxAgeDays = 14) {
   const row = await withSharedDatabase((db) => db.get(
@@ -188,6 +227,6 @@ async function saveFundamentals(symbol, payload) {
 module.exports = {
   cacheGet, cacheSet, cachePurge,
   upsertSymbols, listSymbols, symbolCount, lookupSymbol,
-  saveScanRows, replaceDailyTop, latestScanDate, topForDate, scanDates, topAppearances,
+  saveScanRows, replaceDailyTop, latestScanDate, topForDate, scanDates, topAppearances, stockScanHistory,
   getFundamentals, saveFundamentals,
 };

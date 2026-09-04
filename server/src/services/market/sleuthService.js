@@ -13,6 +13,7 @@ const indicators = require('./indicators');
 const garch = require('./garch');
 const scoring = require('../scoring/scoreService');
 const market = require('../../repositories/marketRepository');
+const universe = require('../universe/universeService');
 
 /**
  * Full profile for one symbol.
@@ -38,8 +39,13 @@ async function profile(symbol, { chartPoints = 260 } = {}) {
   const snap = indicators.snapshot(hist.points);
   const vol = garch.volatilityProfile(hist.points);
 
+  // Where the app's own daily rankings have had it — the half of Stock Sleuth that is about
+  // this app's history rather than the live market.
+  const positions = await scanPositions(sym).catch(() => []);
+
   return {
     symbol: sym,
+    scanPositions: positions,
     name,
     industry: meta?.industry || fundamentals?.sector || null,
     ticker: hist.ticker,
@@ -109,6 +115,82 @@ async function profile(symbol, { chartPoints = 260 } = {}) {
 }
 
 /** Where this level of volatility sits for Indian equities generally. Context, not a verdict. */
+/**
+ * Where this stock has been sitting in each of the four scanned indices.
+ *
+ * This is the part the desktop app's Stock Sleuth is built around and this one lacked: not what
+ * the stock looks like right now, which the rest of the profile covers, but whether the app's own
+ * daily ranking has been noticing it — how often it made the Top 25, how its rank moved, and what
+ * the scan recorded on the day.
+ *
+ * An index the stock has never appeared in returns nothing rather than an empty shell, so the
+ * page shows only the lists it is actually in.
+ */
+async function scanPositions(symbol, days = 60) {
+  const sym = String(symbol || '').trim().toUpperCase();
+  const out = [];
+
+  for (const key of universe.UNIVERSE_KEYS) {
+    // eslint-disable-next-line no-await-in-loop
+    const rows = await market.stockScanHistory(key, sym, days).catch(() => []);
+    if (!rows.length) continue;
+
+    const inTop = rows.filter((r) => r.top25_rank != null);
+    const topRanks = inTop.map((r) => r.top25_rank);
+    const uniRanks = rows.filter((r) => r.combined_score != null).map((r) => r.uni_rank);
+    // Newest first, so [0] is the latest scan and [1] the one before it.
+    const scored = rows.filter((r) => r.combined_score != null);
+    const latest = scored[0] || null;
+    const prev = scored[1] || null;
+    const detail = (() => { try { return JSON.parse(latest?.detail_json || '{}'); } catch { return {}; } })();
+
+    out.push({
+      universe: key,
+      label: universe.UNIVERSES[key].label,
+      daysCovered: rows.length,
+      daysInTop25: inTop.length,
+      top25Pct: rows.length ? Math.round((inTop.length / rows.length) * 100) : 0,
+      bestTop25Rank: topRanks.length ? Math.min(...topRanks) : null,
+      worstTop25Rank: topRanks.length ? Math.max(...topRanks) : null,
+      // Rank within the whole index, which only exists for days whose scores were stored — the
+      // imported history carries rankings alone.
+      avgUniRank: uniRanks.length
+        ? Math.round(uniRanks.reduce((a, b) => a + b, 0) / uniRanks.length) : null,
+      bestUniRank: uniRanks.length ? Math.min(...uniRanks) : null,
+      worstUniRank: uniRanks.length ? Math.max(...uniRanks) : null,
+      scoredDays: scored.length,
+      name: latest?.name || null,
+      industry: latest?.industry || null,
+      latest: latest ? {
+        date: latest.scan_date,
+        uniRank: latest.uni_rank,
+        uniTotal: latest.uni_total,
+        // Rank moved which way since the previous scored scan. Lower is better, so a fall in the
+        // number is an improvement — stated here rather than left to the page to get backwards.
+        rankMove: prev && prev.uni_rank != null && latest.uni_rank != null
+          ? prev.uni_rank - latest.uni_rank : null,
+        top25Rank: latest.top25_rank,
+        combinedScore: latest.combined_score,
+        technicalScore: latest.technical_score,
+        momentumScore: latest.momentum_score,
+        fundamentalScore: detail.fundamentalScore ?? null,
+        rsi: latest.rsi,
+        r1w: latest.r1w, r1m: latest.r1m, r3m: latest.r3m, r6m: latest.r6m,
+        emaLadder: detail.emaLadder || null,
+        ema50Slope: detail.ema50Slope ?? null,
+      } : null,
+      days: rows.map((r) => ({
+        date: r.scan_date,
+        top25Rank: r.top25_rank,
+        uniRank: r.combined_score != null ? r.uni_rank : null,
+        uniTotal: r.uni_total,
+        score: r.combined_score,
+      })),
+    });
+  }
+  return out;
+}
+
 function volBand(v) {
   if (!Number.isFinite(v)) return null;
   if (v < 18) return 'low';
@@ -152,4 +234,4 @@ async function search(query, limit = 12) {
 const round2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
 const scale = (v, factor) => (Number.isFinite(v) ? round2(v * factor) : null);
 
-module.exports = { profile, search, volBand };
+module.exports = { profile, search, volBand, scanPositions };

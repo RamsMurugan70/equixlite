@@ -750,6 +750,80 @@ function openSleuth(symbol) {
   openTab('sleuth');
 }
 
+/**
+ * One index's view of a stock: how often it made the Top 25, where it ranks among its peers, and
+ * what the most recent scan recorded.
+ *
+ * Rank counts UP as the stock gets worse, so a fall in the number is an improvement. The arrow is
+ * drawn from that rather than from the sign, because a green "-7" reads as a loss to everyone who
+ * has not just written the code.
+ */
+function scanPositionCard(p) {
+  const box = el('div', { className: 'panel-inset' });
+  const l = p.latest;
+
+  box.append(el('div', { className: 'brow' },
+    el('h3', {}, p.label),
+    p.name ? el('span', { className: 'muted' }, p.name) : '',
+    p.industry ? el('span', { className: 'tag user' }, p.industry) : ''));
+
+  // The headline: has the ranking ever picked this stock out?
+  const topLine = p.daysInTop25
+    ? `In the Top 25 on ${p.daysInTop25} of ${p.daysCovered} scan day(s) (${p.top25Pct}%)`
+      + `, best #${p.bestTop25Rank}`
+    : `Never in the Top 25 across ${p.daysCovered} scan day(s) on record`;
+  const rankLine = p.avgUniRank
+    ? ` · rank avg #${p.avgUniRank} of the index (best #${p.bestUniRank}, worst #${p.worstUniRank}`
+      + `, from ${p.scoredDays} scored day${p.scoredDays === 1 ? '' : 's'})`
+    : '';
+  box.append(el('p', { className: 'muted small' }, topLine + rankLine));
+
+  if (!l) {
+    box.append(el('p', { className: 'muted small' },
+      'Rankings are on record for this index but not the scores behind them, so there is no '
+      + 'per-day detail to show yet.'));
+    return box;
+  }
+
+  const move = l.rankMove === null || l.rankMove === 0 ? null
+    : el('span', { className: l.rankMove > 0 ? 'pos' : 'neg' },
+      `${l.rankMove > 0 ? '▲' : '▼'} ${Math.abs(l.rankMove)}`);
+
+  box.append(el('div', { className: 'stats' },
+    stat('Rank', l.uniRank ? `#${l.uniRank}` : '—',
+      l.uniTotal ? `of ${l.uniTotal} scored` : ''),
+    stat('Score', l.combinedScore ?? '—',
+      [l.technicalScore != null ? `T${l.technicalScore}` : null,
+        l.fundamentalScore != null ? `F${l.fundamentalScore}` : null,
+        l.momentumScore != null ? `M${l.momentumScore}` : null].filter(Boolean).join(' · ')),
+    stat('RSI', l.rsi ?? '—', `as of ${l.date}`),
+    stat('Rank move', move || '—', move ? 'since the previous scan' : 'no earlier scan to compare')));
+
+  box.append(el('div', { className: 'brow' },
+    el('span', { className: 'muted small' }, 'Returns at that scan:'),
+    ...[['1W', l.r1w], ['1M', l.r1m], ['3M', l.r3m], ['6M', l.r6m]].map(([k, v]) =>
+      el('span', { className: 'muted small' },
+        `${k} `, el('span', { className: (v || 0) >= 0 ? 'pos' : 'neg' }, pct(v, 1)))),
+    l.emaLadder
+      ? el('span', { className: `tag ${ladderTag(l.emaLadder)}` }, l.emaLadder.replace(/_/g, ' ').toLowerCase())
+      : ''));
+
+  // The rank trail, most recent last so it reads left to right like time.
+  const trail = p.days.filter((x) => x.uniRank != null || x.top25Rank != null).slice(0, 30).reverse();
+  if (trail.length > 1) {
+    box.append(el('div', { className: 'tw' }, table(
+      ['Scan day', 'Top 25', 'Rank in index', 'Score'],
+      trail.map((x) => [
+        x.date,
+        x.top25Rank ? el('span', { className: 'tag src-orders' }, `#${x.top25Rank}`) : '—',
+        x.uniRank ? `#${x.uniRank}${x.uniTotal ? ` of ${x.uniTotal}` : ''}` : '—',
+        x.score ?? '—',
+      ]))));
+  }
+  return box;
+}
+
+
 async function renderSleuth(body) {
   const input = el('input', { className: 'sm', placeholder: 'Symbol, e.g. RELIANCE',
     value: sleuthSymbol || '', autocomplete: 'off', spellcheck: false });
@@ -850,6 +924,17 @@ async function renderSleuth(body) {
     stat('Fundamental', sc.fundamentalScore ?? '—', sc.fundamentalScore === null ? 'not available' : 'P/E, P/B, ROE, D/E, growth'),
     stat('Momentum', sc.momentumScore ?? '—', '1M, 3M, 6M returns')));
   if (sc.note) nodes.push(el('p', { className: 'muted small' }, sc.note));
+
+  // Where the app's own daily rankings have had it. This is what the desktop app's Stock Sleuth
+  // is built around, and the half this page was missing: not what the stock looks like now, but
+  // whether the scan has been noticing it, and where it sits among its peers.
+  for (const p of d.scanPositions || []) nodes.push(scanPositionCard(p));
+  if (!(d.scanPositions || []).length) {
+    nodes.push(el('p', { className: 'muted small' },
+      `${d.symbol} is not a constituent of any index this app scans (Nifty 500, Midcap 150, `
+      + 'Smallcap 250, Microcap 250), so it has no ranking history here. Everything above is '
+      + 'computed live and is unaffected.'));
+  }
 
   // Price history.
   if (d.history?.length) {
