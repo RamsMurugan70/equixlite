@@ -158,14 +158,21 @@ async function fetchOrders(userId) {
     symbol: t.tradingsymbol,
     tradeDate: String(t.fill_timestamp || t.exchange_timestamp || '').slice(0, 10),
     tradeTime: String(t.fill_timestamp || t.exchange_timestamp || '').slice(11, 19) || null,
-    side: String(t.transaction_type || '').toUpperCase(),
-    quantity: Number(t.quantity) || 0,
-    price: Number(t.average_price) || 0,
+    // Anything that is not a sell is a buy. Storing the raw value would put whatever Zerodha
+    // sent straight into a column with a CHECK constraint on it.
+    side: String(t.transaction_type || '').toUpperCase() === 'SELL' ? 'SELL' : 'BUY',
+    quantity: Number(t.quantity ?? t.filled_quantity) || 0,
+    price: Number(t.average_price ?? t.price) || 0,
     exchange: t.exchange || 'NSE',
-    // Kite ids exceed Number.MAX_SAFE_INTEGER, so they are kept as strings all the way through.
-    brokerOrderId: t.order_id ? String(t.order_id) : null,
+    // THE TRADE ID, NOT THE ORDER ID. One order can fill in several trades, and the importer
+    // treats a repeated broker id as a duplicate and skips it — so keying on order_id silently
+    // drops every fill after the first, recording a 1,000-share buy that filled in three
+    // tranches as one tranche. Kept as a string because Zerodha's ids run past
+    // Number.MAX_SAFE_INTEGER and lose their last digits as numbers.
+    brokerOrderId: t.trade_id != null ? String(t.trade_id)
+      : (t.order_id != null ? String(t.order_id) : null),
     source: 'broker',
-  }));
+  })).filter((o) => o.symbol && o.quantity > 0);
 }
 
 module.exports = { BROKER, loginUrl, connect, fetchHoldings, fetchOrders, sessionExpiry };

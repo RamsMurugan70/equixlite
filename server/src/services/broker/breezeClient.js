@@ -359,7 +359,10 @@ async function fetchTradesOn(userId, { from, to, exchange }) {
       quantity: qty,
       price,
       exchange: t.exchange_code || 'NSE',
-      brokerOrderId: t.order_id || t.trade_id || null,
+      // The trade id first: one order can fill in several trades, and the importer skips a
+      // repeated broker id as a duplicate — so keying on order_id loses every fill after the
+      // first on a partially-filled order.
+      brokerOrderId: t.trade_id || t.order_id || null,
       source: 'broker',
     };
   });
