@@ -109,6 +109,66 @@ function setToolbar(...nodes) {
 }
 
 // ── dashboard ────────────────────────────────────────────────────────────────
+// The three signal levels reuse the tag palette the rest of the app already speaks — green for
+// good, amber for watch, red for act — rather than introducing a fourth colour vocabulary.
+const SIGNAL_TAG = { positive: 'src-orders', warning: 'pend', negative: 'off' };
+
+/** One panel per alert type. Returns [] when there is nothing worth showing. */
+function alertCards(d) {
+  const alerts = d.alerts || [];
+  const cov = d.alertsCoverage;
+  // Said whenever the rules did not see the whole book, alerts or not. A quiet dashboard means
+  // something different when half the portfolio was never examined, and the reader cannot tell
+  // those apart without being told.
+  const coverageNote = () => {
+    if (!cov || cov.scored === cov.total) return [];
+    const missing = cov.unscored.slice(0, 6).join(', ')
+      + (cov.unscored.length > 6 ? ` and ${cov.unscored.length - 6} more` : '');
+    return [el('p', { className: 'muted' },
+      `These rules cover ${cov.scored} of ${cov.total} holdings (${cov.valuePct}% of value). `
+      + `Not scanned, so not checked: ${missing}. `
+      + 'A holding is only scanned if it is in the Nifty 500, Midcap 150, Smallcap 250 or Microcap 250.')];
+  };
+
+  if (!alerts.length) {
+    // Silence is the normal, healthy state: no alerts means no holding tripped a threshold. The
+    // coverage caveat still belongs here, because that is exactly when it is misread.
+    if (d.alertsError) {
+      return [el('div', { className: 'panel-inset' },
+        el('p', { className: 'muted' }, `Alerts unavailable: ${d.alertsError}`))];
+    }
+    return cov && cov.scored < cov.total
+      ? [el('div', { className: 'panel-inset' },
+        el('h3', {}, 'Nothing needs attention'), ...coverageNote())]
+      : [];
+  }
+
+  const panels = alerts.map((a) => {
+    const rows = a.items.map((it) => [
+      // Sector skew puts a sector name in `symbol`, which is not a tradeable thing to link to.
+      a.type === 'sector_skew' ? it.symbol : symbolLink(it.symbol),
+      el('span', { className: `tag ${SIGNAL_TAG[it.signal] || 'user'}` }, it.metric),
+      it.sub || '—',
+      it.portfolio || '—',
+      it.action || '—',
+    ]);
+    return el('div', { className: 'panel-inset' },
+      el('div', { className: 'brow' },
+        el('h3', {}, `${a.icon} ${a.title}`),
+        el('span', { className: 'muted' }, a.subtitle)),
+      // 'Signal' rather than a blank header: the column holds the reading that tripped the rule,
+      // and an empty th is read aloud as nothing at all by a screen reader.
+      table(['Symbol', 'Signal', 'Also', 'Where', 'What it suggests'], rows));
+  });
+
+  if (d.alertsAsOf) {
+    panels.push(el('p', { className: 'muted' },
+      `Return figures from the scan of ${d.alertsAsOf}.`));
+  }
+  panels.push(...coverageNote());
+  return panels;
+}
+
 async function renderDashboard(body) {
   const d = await api('/api/dashboard');
   const t = d.totals;
@@ -136,6 +196,11 @@ async function renderDashboard(body) {
       return c;
     })));
   }
+
+  // Alerts, above the movers: "down 3% this week" is a reason to do something, where "down
+  // today" is mostly noise. Nothing is rendered at all when there is nothing to say — an empty
+  // "Alerts" heading trains people to stop looking at the section that matters most.
+  nodes.push(...alertCards(d));
 
   // Movers.
   if (d.gainers.length || d.losers.length) {

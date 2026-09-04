@@ -12,6 +12,7 @@ const holdings = require('../services/portfolio/holdingsService');
 const pickerMatch = require('../services/recommendations/pickerMatchService');
 const brokerCatalog = require('../services/broker/brokerCatalog');
 const decisionReview = require('../services/portfolio/decisionReviewService');
+const portfolioAlerts = require('../services/portfolio/alertsService');
 const repo = require('../repositories/portfolioRepository');
 
 const USER_FIXABLE = new Set([
@@ -197,9 +198,18 @@ async function dashboard(req, res, next) {
       performance.valueHistory(req.user.id, { window: '3M' }).catch(() => null),
     ]);
 
-    const all = overview.portfolios.flatMap((p) => p.holdings);
+    // Carry the portfolio name onto each holding: an alert saying RELIANCE is 18% of everything
+    // is only actionable if you know which account it sits in.
+    const all = overview.portfolios.flatMap((p) => p.holdings.map(
+      (h) => ({ ...h, portfolioName: p.portfolio.name })));
     const priced = all.filter((h) => h.ltp > 0);
     const movers = priced.slice().sort((a, b) => b.dayChangePct - a.dayChangePct);
+
+    // Never fatal. The alerts are the most valuable thing on this page and the least essential —
+    // a dashboard that 500s because one scan row is malformed is worse than one without cards.
+    const alerts = await portfolioAlerts.buildAlerts(all)
+      .catch((e) => ({ alerts: [], totalInvested: 0, holdingCount: all.length,
+        scanDate: null, error: e.message }));
 
     return res.json({
       totals: overview.totals,
@@ -223,6 +233,10 @@ async function dashboard(req, res, next) {
       losers: movers.filter((h) => h.dayChangePct < 0).slice(-5).reverse(),
       topPicks: picks.picks.slice(0, 5),
       picksAsOf: picks.scanDate,
+      alerts: alerts.alerts,
+      alertsAsOf: alerts.scanDate,
+      alertsCoverage: alerts.coverage || null,
+      alertsError: alerts.error || null,
       valueSeries: series?.usable ? series.series : null,
       // Named so the page can explain a blank chart instead of just drawing nothing.
       valueSeriesReason: series?.usable ? null

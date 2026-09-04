@@ -205,6 +205,79 @@ async function stockScanHistory(universe, symbol, days = 60) {
     [universe, sym, universe, sym, universe, universe, universe, sym, universe, sym, days]));
 }
 
+/**
+ * The most recent score row for each of `symbols`, whichever index it came from.
+ *
+ * ACROSS ALL FOUR UNIVERSES, not just the NIFTY 500. The desktop app's version of this query is
+ * hardcoded to NIFTY500, which silently drops any holding that is only a midcap or smallcap
+ * constituent — a portfolio of small caps gets no alerts at all and nothing says why.
+ *
+ * DEDUPED BY SYMBOL, because the indices overlap: the NIFTY 500 contains most of the midcap 150,
+ * so one stock legitimately has a row under each. The scanner scores a symbol once per day and
+ * writes that same score to every index it belongs to, so any of the rows will do.
+ *
+ * PER-SYMBOL LATEST DATE, not one global latest. A stock that left an index still has its last
+ * scored day on record, and reporting "no data" for it because a newer scan exists for other
+ * symbols would be wrong.
+ */
+async function latestScoresFor(symbols) {
+  const list = [...new Set(symbols.map((s) => String(s || '').toUpperCase()).filter(Boolean))];
+  if (!list.length) return new Map();
+  const ph = list.map(() => '?').join(',');
+  const rows = await withSharedDatabase((db) => db.all(
+    `SELECT s.symbol, s.scan_date, s.industry, s.combined_score, s.technical_score,
+            s.momentum_score, s.rsi, s.r1w, s.r1m, s.r3m, s.r6m, s.detail_json
+       FROM universe_scores s
+       JOIN (SELECT symbol, MAX(scan_date) AS d FROM universe_scores
+              WHERE symbol IN (${ph}) GROUP BY symbol) m
+         ON m.symbol = s.symbol AND m.d = s.scan_date
+      GROUP BY s.symbol`,
+    list));
+  return new Map(rows.map((r) => {
+    let detail = {};
+    try { detail = JSON.parse(r.detail_json || '{}'); } catch { /* leave empty */ }
+    return [r.symbol.toUpperCase(), {
+      scanDate: r.scan_date,
+      industry: r.industry || null,
+      combinedScore: r.combined_score,
+      technicalScore: r.technical_score,
+      momentumScore: r.momentum_score,
+      rsi: r.rsi,
+      r1w: r.r1w, r1m: r.r1m, r3m: r.r3m, r6m: r.r6m,
+      emaLadder: detail.emaLadder ?? null,
+    }];
+  }));
+}
+
+/**
+ * Corporate actions on the given symbols, split into what is coming and what just happened.
+ *
+ * Returns empty lists rather than throwing when the table is empty, which it currently always is
+ * — nothing populates `corporate_actions` yet. The alerts built on this are written so they light
+ * up on their own the day something does, rather than needing to be revisited.
+ */
+async function corporateActionsFor(symbols, { aheadDays = 21, backDays = 30 } = {}) {
+  const list = [...new Set(symbols.map((s) => String(s || '').toUpperCase()).filter(Boolean))];
+  if (!list.length) return { upcoming: [], recent: [] };
+  const ph = list.map(() => '?').join(',');
+  const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10);
+  const today = day(0);
+
+  return withSharedDatabase(async (db) => {
+    const upcoming = await db.all(
+      `SELECT symbol, ex_date, kind, factor, detail FROM corporate_actions
+        WHERE UPPER(symbol) IN (${ph}) AND ex_date >= ? AND ex_date <= ?
+        ORDER BY ex_date`,
+      [...list, today, day(aheadDays)]);
+    const recent = await db.all(
+      `SELECT symbol, ex_date, kind, factor, detail FROM corporate_actions
+        WHERE UPPER(symbol) IN (${ph}) AND ex_date < ? AND ex_date >= ?
+        ORDER BY ex_date DESC`,
+      [...list, today, day(-backDays)]);
+    return { upcoming, recent };
+  });
+}
+
 // ── Fundamentals ─────────────────────────────────────────────────────────────
 async function getFundamentals(symbol, maxAgeDays = 14) {
   const row = await withSharedDatabase((db) => db.get(
@@ -228,5 +301,6 @@ module.exports = {
   cacheGet, cacheSet, cachePurge,
   upsertSymbols, listSymbols, symbolCount, lookupSymbol,
   saveScanRows, replaceDailyTop, latestScanDate, topForDate, scanDates, topAppearances, stockScanHistory,
+  latestScoresFor, corporateActionsFor,
   getFundamentals, saveFundamentals,
 };
