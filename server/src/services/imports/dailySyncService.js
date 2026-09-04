@@ -14,6 +14,7 @@
 // happening.
 const repo = require('../../repositories/portfolioRepository');
 const credentials = require('../../repositories/credentialRepository');
+const userRepo = require('../../repositories/userRepository');
 const { withUserDatabase } = require('../../db/tenantGuard');
 const breeze = require('../broker/breezeClient');
 const kite = require('../broker/kiteClient');
@@ -177,7 +178,127 @@ async function getStatus(userId, { sinceDays = 30 } = {}) {
   }
   gaps.sort((a, b) => b.date.localeCompare(a.date));
 
-  return { today, connections, todayRuns, gaps: gaps.slice(0, 40) };
+  // When the box will next try on its own. Required late rather than at the top of the file
+  // because the scheduler requires this module — importing it back at load time is a cycle.
+  // Reported as null rather than omitted when the scheduler is off, so the page can say the
+  // difference between "next attempt at 17:00" and "nothing will happen unless you press Run".
+  let nextAutoSyncAt = null;
+  try {
+    const sched = require('../ops/scheduler');
+    nextAutoSyncAt = sched.status().brokerSync?.nextRunAt || null;
+  } catch { /* scheduler not running — the button is the only path */ }
+
+  return { today, connections, todayRuns, gaps: gaps.slice(0, 40), nextAutoSyncAt };
 }
 
-module.exports = { runDailySync, getStatus, recordRun };
+// ── Scheduled sweep, across every account ────────────────────────────────────
+// The desktop app syncs one person's portfolios. Here it has to walk every trader on the box,
+// which changes two things: how much noise a repeated failure makes, and whose day it is.
+
+/** Portfolios already captured successfully today, so a later slot leaves them alone. */
+async function capturedToday(userId, kinds = ['holdings', 'orders']) {
+  const today = todayIst();
+  const rows = await withUserDatabase(userId, (db, uid) => db.all(
+    `SELECT portfolio_id, kind, started_at FROM import_runs
+      WHERE user_id = ? AND status = 'ok' AND kind IN (${kinds.map(() => '?').join(',')})
+        AND started_at >= ?`,
+    [uid, ...kinds, new Date(Date.now() - 2 * 864e5).toISOString()]));
+  const done = new Set();
+  for (const r of rows) {
+    if (istDateOf(r.started_at) === today) done.add(`${r.portfolio_id}|${r.kind}`);
+  }
+  return done;
+}
+
+/** Whether this portfolio+kind already has a failure on record today. */
+async function failedToday(userId) {
+  const today = todayIst();
+  const rows = await withUserDatabase(userId, (db, uid) => db.all(
+    `SELECT portfolio_id, kind, started_at FROM import_runs
+      WHERE user_id = ? AND status = 'failed' AND started_at >= ?`,
+    [uid, new Date(Date.now() - 2 * 864e5).toISOString()]));
+  const seen = new Set();
+  for (const r of rows) {
+    if (istDateOf(r.started_at) === today) seen.add(`${r.portfolio_id}|${r.kind}`);
+  }
+  return seen;
+}
+
+/**
+ * One user's scheduled attempt.
+ *
+ * SKIPS WHAT ALREADY WORKED. Six hourly slots against an account that succeeded at 16:00 would
+ * re-fetch the same holdings five more times, for nothing, against a broker rate limit.
+ *
+ * RECORDS A FAILURE ONCE A DAY, not once a slot. A user who tagged a portfolio with a broker and
+ * never logs in would otherwise collect twelve failure rows every day, which buries the gaps that
+ * mean something. The first slot records the failure; later ones retry silently, and a success
+ * still writes its row and clears the day.
+ */
+async function runScheduledSyncForUser(userId) {
+  const [portfolios, brokerStatus] = await Promise.all([
+    repo.listPortfolios(userId), credentials.getStatus(userId),
+  ]);
+  const tagged = portfolios.filter((p) => p.broker);
+  if (!tagged.length) return { userId, skipped: 'no broker-tagged portfolio' };
+
+  const byBroker = new Map(brokerStatus.map((b) => [b.broker, b]));
+  const [done, failed] = await Promise.all([capturedToday(userId), failedToday(userId)]);
+
+  const results = [];
+  for (const p of tagged) {
+    const b = byBroker.get(p.broker);
+    for (const kind of ['holdings', 'orders']) {
+      const key = `${p.id}|${kind}`;
+      if (done.has(key)) continue;
+
+      if (!b?.connected) {
+        if (!failed.has(key)) {
+          const detail = b?.configured
+            ? `${LABEL[p.broker]} not connected — log in to capture today`
+            : `${LABEL[p.broker]} API key not configured`;
+          // eslint-disable-next-line no-await-in-loop
+          await recordRun(userId, { portfolioId: p.id, kind, source: p.broker,
+            rowsSeen: 0, rowsInserted: 0, status: 'failed', detail });
+          results.push({ portfolioId: p.id, kind, status: 'failed', detail });
+        }
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      const r = kind === 'holdings'
+        ? await syncHoldings(userId, p, p.broker)
+        : await syncOrders(userId, p, p.broker);
+      results.push({ portfolioId: p.id, ...r });
+    }
+  }
+  return { userId, results };
+}
+
+/** Every enabled trading account, one after another. */
+async function runScheduledSync() {
+  const users = (await userRepo.listUsers())
+    .filter((u) => u.role !== 'admin' && !u.disabled);
+
+  const out = [];
+  for (const u of users) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      out.push(await runScheduledSyncForUser(u.id));
+    } catch (e) {
+      // One account's broken credentials must not stop the next account's capture.
+      out.push({ userId: u.id, error: e.message });
+    }
+  }
+  const attempted = out.filter((r) => r.results?.length);
+  return {
+    users: users.length,
+    attempted: attempted.length,
+    ok: attempted.reduce((n, r) => n + r.results.filter((x) => x.status === 'ok').length, 0),
+    failed: attempted.reduce((n, r) => n + r.results.filter((x) => x.status === 'failed').length, 0),
+  };
+}
+
+module.exports = {
+  runDailySync, getStatus, recordRun,
+  runScheduledSync, runScheduledSyncForUser, capturedToday,
+};

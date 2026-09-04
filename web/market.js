@@ -495,6 +495,15 @@ async function renderDailySync(body) {
   nodes.push(el('div', { className: 'cards' }, d.connections.map((c) => connectionCard(c))));
   nodes.push(out);
 
+  // What the box will do without being asked. Worth stating either way: someone who does not
+  // know a capture runs at 16:00 will press Run every evening, and someone who assumes one does
+  // when the scheduler is off will find holes in their history months later.
+  nodes.push(el('p', { className: 'muted' }, d.nextAutoSyncAt
+    ? `Captures on its own hourly from 16:00 to 21:00 IST on weekdays — next at `
+      + `${new Date(d.nextAutoSyncAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}. `
+      + 'Each attempt skips whatever already captured today, so a late login still gets the day in.'
+    : 'Automatic capture is off on this server — nothing is recorded unless you press Sync now.'));
+
   const todayBox = el('div', { className: 'panel-inset' }, el('h3', {}, `Today (${d.today})`));
   if (!d.todayRuns.length) {
     todayBox.append(el('p', { className: 'muted' }, 'Nothing synced yet today.'));
