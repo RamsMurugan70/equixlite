@@ -29,6 +29,7 @@ server/
     middleware/   auth guards, security headers, rate limiting
     repositories/ data access; every tenant query takes a userId
     services/
+      advice/     recorded ideas, scored against prices and against what you did
       auth/       passwords
       broker/     Breeze (ICICI) and Kite (Zerodha) clients
       market/     Yahoo client, indicators, GARCH, Stock Sleuth
@@ -67,10 +68,10 @@ shares the scan lock and two scans cannot race. `GET /api/admin/ops` reports wha
 cd server && npm test
 ```
 
-217 assertions, no network required: the vault's crypto, FIFO lot matching against hand-worked
+244 assertions, no network required: the vault's crypto, FIFO lot matching against hand-worked
 tax cases, tenant isolation at the data level, the indicators and GARCH against synthetic data
 with known parameters, the scoring port at every threshold boundary, Ask the Data's query
-scoping, the account rules (three per user, one broker each), and the admin/trader boundary.
+scoping, the account rules (three per user, one broker each), the admin/trader boundary, and how an idea's outcome is judged (including when the price history does not reach back to the call).
 
 ## Running it
 

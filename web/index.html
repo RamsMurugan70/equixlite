@@ -301,6 +301,21 @@
       <div id="admin-msg" class="msg" hidden></div>
       <div class="tw" id="admin-users"></div>
 
+      <!-- Ideas published to every user. An admin cannot trade, so this is the one place the
+           list is written; users read it on their own Ideas tab. -->
+      <div class="panel-inset" id="admin-advice">
+        <h3>Published ideas</h3>
+        <p class="muted small">
+          Everyone signed in sees these on their Ideas tab, alongside their own. The app tracks
+          what the price did and who acted on it. Withdrawing one hides it from the list without
+          erasing it from the history of anyone who traded on it.
+        </p>
+        <div id="publish-fields"></div>
+        <div class="row"><button id="btn-publish" type="button">Publish idea</button></div>
+        <div id="publish-msg" class="msg" hidden></div>
+        <div class="tw" id="shared-advice-list"></div>
+      </div>
+
       <!-- The market scan is shared data and admin-triggered, so it lives on the admin page
            rather than on a trading tab an admin cannot reach. -->
       <div class="panel-inset" id="admin-scan">

@@ -903,3 +903,203 @@ async function renderAskData(body) {
   askBtn.onclick = doAsk;
   q.addEventListener('keydown', (e) => { if (e.key === 'Enter') doAsk(); });
 }
+
+// ── ideas ────────────────────────────────────────────────────────────────────
+// Ideas you recorded and ideas that were published to you, each scored two ways: did the call
+// work, and did you act on it. They are different questions — good advice can be executed badly
+// — so they get separate columns rather than one blended number.
+
+const OUTCOME_TAG = {
+  hit_target: ['src-orders', 'Target hit'],
+  hit_stop: ['off', 'Stopped out'],
+  open: ['user', 'Open'],
+  unknown: ['pend', 'Unknown'],
+};
+
+// A partial row is one whose price history does not reach back to the day of the call, so what
+// is shown is what could be seen rather than the whole story. Marked rather than blended in:
+// an "Unknown" that looks identical to an "Open" is the reason to have the distinction at all.
+function outcomeTag(a) {
+  const [cls, label] = OUTCOME_TAG[a.outcome] || OUTCOME_TAG.open;
+  const why = a.partial
+    ? `prices only go back to ${a.historyFrom || 'later than the call'}, so earlier moves are not counted`
+    : (a.outcomeOn ? `on ${a.outcomeOn}` : '');
+  const tag = el('span', { className: `tag ${cls}`, title: why }, label);
+  return a.partial ? el('span', { className: 'brow' }, tag, el('span', { className: 'muted', title: why }, '*')) : tag;
+}
+
+function actedTag(a) {
+  if (!a.acted) return el('span', { className: 'muted' }, 'not acted on');
+  const { lagDays, tradeDate, quantity, price } = a.acted;
+  const when = lagDays === 0 ? 'same day' : `${lagDays}d later`;
+  return el('span', {
+    className: 'tag src-orders',
+    title: `${quantity} @ ${price} on ${tradeDate}`,
+  }, when);
+}
+
+async function renderIdeas(body) {
+  const d = await api('/api/advice');
+  const nodes = [];
+  const s = d.summary;
+
+  nodes.push(el('div', { className: 'stats' },
+    stat('Ideas', String(s.total), `${s.mine} yours · ${s.shared} published`),
+    stat('Acted on', String(s.actedOn), s.total ? `of ${s.total}` : ''),
+    stat('Win rate', s.winRate === null ? '—' : `${s.winRate}%`, 'of ideas, acted on or not'),
+    stat('Avg move', s.avgCallReturnPct === null ? '—' : `${s.avgCallReturnPct}%`, 'since the call'),
+    stat('Target / stop', `${s.hitTarget} / ${s.hitStop}`, 'reached so far')));
+
+  nodes.push(logIdeaForm());
+
+  if (!d.ideas.length) {
+    nodes.push(el('p', { className: 'muted' },
+      'No ideas recorded yet. Log one above — a tip you were given, or your own thesis — and the '
+      + 'app tracks what the price did and whether you acted on it.'));
+    body.replaceChildren(...nodes);
+    return;
+  }
+
+  nodes.push(table(
+    ['Symbol', 'Source', 'Call', 'Advised', 'Entry', 'Target', 'Stop', 'Now', 'Since call', 'Outcome', 'Acted', ''],
+    d.ideas.map((a) => [
+      symbolLink(a.symbol),
+      a.scope === 'shared'
+        ? el('span', { className: 'brow' },
+          el('span', { className: 'tag admin', title: `published by ${a.author}` }, 'published'),
+          a.source)
+        : a.source,
+      el('span', { className: a.action === 'BUY' ? 'pos' : 'neg' }, a.action),
+      a.advisedOn,
+      a.entry ?? '—',
+      a.target ?? '—',
+      a.stopLoss ?? '—',
+      a.ltp ?? '—',
+      // Signed so positive always means the call was right, whichever way it pointed.
+      a.callReturnPct === null ? '—'
+        : el('span', { className: a.callReturnPct >= 0 ? 'pos' : 'neg' },
+          `${a.callReturnPct >= 0 ? '+' : ''}${a.callReturnPct}%`),
+      outcomeTag(a),
+      actedTag(a),
+      a.scope === 'mine' ? ideaRowActions(a) : '',
+    ])));
+
+  nodes.push(el('p', { className: 'muted small' }, d.caveat));
+  if (d.ideas.some((a) => a.partial)) {
+    nodes.push(el('p', { className: 'muted small' },
+      '* Prices for this idea do not go back as far as the day it was called, so its move and '
+      + 'outcome cover only the part on record.'));
+  }
+
+  // Which sources are worth listening to. Scored on the ideas themselves, so a source is not
+  // punished for calls you chose not to take.
+  if (d.sources.length > 1) {
+    nodes.push(el('div', { className: 'panel-inset' },
+      el('h3', {}, 'By source'),
+      table(['Source', 'Ideas', 'Acted on', 'Win rate', 'Avg move'],
+        d.sources.map((x) => [
+          x.source,
+          String(x.ideas),
+          String(x.actedOn),
+          x.winRate === null ? '—' : `${x.winRate}%`,
+          x.avgReturnPct === null ? '—'
+            : el('span', { className: x.avgReturnPct >= 0 ? 'pos' : 'neg' },
+              `${x.avgReturnPct >= 0 ? '+' : ''}${x.avgReturnPct}%`),
+        ]))));
+  }
+
+  body.replaceChildren(...nodes);
+}
+
+/** Close / reopen / delete, for a user's own ideas only. */
+function ideaRowActions(a) {
+  const close = el('button', {
+    className: 'ghost sm',
+    textContent: a.closedOn ? 'Reopen' : 'Close',
+    title: a.closedOn ? `Closed ${a.closedOn}` : 'Archive this idea',
+  });
+  close.onclick = async () => {
+    close.disabled = true;
+    try {
+      await api(`/api/advice/${a.id}/closed`, { method: 'PATCH', body: { closed: !a.closedOn } });
+      openTab('ideas');
+    } catch (e) { alert(e.message); close.disabled = false; }
+  };
+  const del = el('button', { className: 'danger sm', textContent: 'Delete' });
+  del.onclick = async () => {
+    if (!confirm(`Delete the ${a.action} idea for ${a.symbol}? This cannot be undone.`)) return;
+    try { await api(`/api/advice/${a.id}`, { method: 'DELETE' }); openTab('ideas'); }
+    catch (e) { alert(e.message); }
+  };
+  return el('div', { className: 'brow' }, close, del);
+}
+
+/**
+ * The fields, shared in shape with the admin's publish form — only the endpoint differs, so the
+ * two screens cannot drift into asking for different things.
+ */
+function ideaFields() {
+  const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+  const f = {
+    symbol: el('input', { placeholder: 'RELIANCE', autocapitalize: 'characters', spellcheck: false }),
+    source: el('input', { placeholder: 'who or what suggested it' }),
+    action: el('select', {}, [el('option', { value: 'BUY' }, 'Buy'), el('option', { value: 'SELL' }, 'Sell')]),
+    advisedOn: el('input', { type: 'date', value: today }),
+    entry: el('input', { type: 'number', step: '0.05', placeholder: 'optional' }),
+    target: el('input', { type: 'number', step: '0.05', placeholder: 'optional' }),
+    stopLoss: el('input', { type: 'number', step: '0.05', placeholder: 'optional' }),
+    timeframe: el('input', { placeholder: 'e.g. 3 months' }),
+    notes: el('input', { placeholder: 'why — optional' }),
+  };
+  const rows = el('div', {},
+    el('div', { className: 'row' },
+      el('label', {}, 'Symbol', f.symbol),
+      el('label', {}, 'Source', f.source),
+      el('label', {}, 'Call', f.action),
+      el('label', {}, 'Advised on', f.advisedOn)),
+    el('div', { className: 'row' },
+      el('label', {}, 'Entry', f.entry),
+      el('label', {}, 'Target', f.target),
+      el('label', {}, 'Stop-loss', f.stopLoss),
+      el('label', {}, 'Timeframe', f.timeframe)),
+    el('div', { className: 'row' }, el('label', {}, 'Notes', f.notes)));
+
+  const read = () => ({
+    symbol: f.symbol.value.trim(),
+    source: f.source.value.trim(),
+    action: f.action.value,
+    advisedOn: f.advisedOn.value,
+    entry: f.entry.value,
+    target: f.target.value,
+    stopLoss: f.stopLoss.value,
+    timeframe: f.timeframe.value.trim(),
+    notes: f.notes.value.trim(),
+  });
+  const clear = () => {
+    for (const k of ['symbol', 'source', 'entry', 'target', 'stopLoss', 'timeframe', 'notes']) {
+      f[k].value = '';
+    }
+  };
+  return { rows, read, clear };
+}
+
+function logIdeaForm() {
+  const { rows, read, clear } = ideaFields();
+  const out = el('div', { className: 'msg', hidden: true });
+  const save = el('button', { textContent: 'Log idea' });
+  save.onclick = async () => {
+    save.disabled = true;
+    msg(out, '');
+    try {
+      await api('/api/advice', { method: 'POST', body: read() });
+      clear();
+      openTab('ideas');
+    } catch (e) { msg(out, e.message, 'err'); save.disabled = false; }
+  };
+  return el('details', { className: 'keys' },
+    el('summary', {}, 'Log an idea'),
+    el('p', { className: 'muted small' },
+      'A tip you were given, or your own thesis. Entry, target and stop-loss are optional — '
+      + 'without them the idea is still tracked, just never marked as hit or stopped.'),
+    rows, el('div', { className: 'row' }, save), out);
+}

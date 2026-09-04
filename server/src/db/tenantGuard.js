@@ -30,6 +30,10 @@ const TENANT_TABLES = new Set([
   'import_runs',
   'broker_credentials',
   'portfolios',
+  // A user's own recorded ideas. Its sibling `shared_advice` is deliberately NOT here: that one
+  // has no user_id, is written by an admin and read by everyone, and belongs with the market
+  // data rather than with anybody's portfolio.
+  'advice',
 ]);
 
 // Tables that carry a user_id but are deliberately NOT tenant-scoped. Declared rather than

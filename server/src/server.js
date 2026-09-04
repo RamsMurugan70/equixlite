@@ -58,6 +58,9 @@ app.use('/api', auth.requireAuth, require('./routes/portfolioRoutes'));
 app.use('/api', auth.requireAuth, require('./routes/marketRoutes'));
 app.use('/api/daily-sync', auth.requireAuth, auth.requireTrader, require('./routes/dailySyncRoutes'));
 app.use('/api/ask-data', auth.requireAuth, auth.requireTrader, require('./routes/askDataRoutes'));
+app.use('/api/advice', auth.requireAuth, auth.requireTrader, require('./routes/adviceRoutes'));
+// Not requireTrader: an admin publishes here, and publishing is content, not trading.
+app.use('/api/shared-advice', auth.requireAuth, require('./routes/sharedAdviceRoutes'));
 
 // DEFAULT DENY. Anything under /api that was not matched above needs a session. A route file
 // added later is therefore protected before its author thinks about it, and the failure mode of

@@ -109,6 +109,7 @@ async function boot() {
     $('#app-panel').hidden = true;
     show('view-app');
     await loadAdmin();
+    await loadSharedAdvice();
     return loadScanState();
   }
   $('#admin-panel').hidden = true;
@@ -203,6 +204,7 @@ const TABS = [
   ['health', 'Health'],
   ['picks', 'Recommendations'],
   ['untracked', 'Untracked Holdings'],
+  ['ideas', 'Ideas'],
   ['performance', 'Performance'],
   ['sleuth', 'Stock Sleuth'],
   ['orders', 'Orders'],
@@ -212,7 +214,7 @@ const TABS = [
 ];
 // Tabs that are about the market rather than one portfolio. The portfolio picker is hidden on
 // these, because offering a choice that changes nothing is worse than offering none.
-const GLOBAL_TABS = new Set(['picks', 'untracked', 'sleuth', 'brokers', 'dashboard', 'actionqueue', 'dailysync', 'askdata']);
+const GLOBAL_TABS = new Set(['picks', 'untracked', 'ideas', 'sleuth', 'brokers', 'dashboard', 'actionqueue', 'dailysync', 'askdata']);
 let activeTab = 'dashboard';
 
 function renderTabs() {
@@ -247,6 +249,7 @@ async function openTab(key) {
     if (key === 'holdings') await renderHoldings(body);
     if (key === 'dailysync') await renderDailySync(body);
     if (key === 'untracked') await renderUntracked(body);
+    if (key === 'ideas') await renderIdeas(body);
     if (key === 'askdata') await renderAskData(body);
     if (key === 'health') await renderHealth(body);
     if (key === 'picks') await renderPicks(body);
@@ -664,6 +667,63 @@ $('#btn-password').onclick = () => {
   show('view-change');
 };
 $('#change-cancel').onclick = () => show('view-app');
+// ── admin: published ideas ───────────────────────────────────────────────────
+// The admin's half of the Ideas feature. Users log their own on the Ideas tab; an admin cannot
+// reach that tab, so publishing lives here — same fields, different endpoint.
+let publishForm = null;
+
+async function loadSharedAdvice() {
+  if (!publishForm) {
+    publishForm = ideaFields();
+    $('#publish-fields').replaceChildren(publishForm.rows);
+  }
+  const { shared } = await api('/api/shared-advice');
+  const box = $('#shared-advice-list');
+  if (!shared.length) {
+    box.replaceChildren(el('p', { className: 'muted' }, 'Nothing published yet.'));
+    return;
+  }
+  box.replaceChildren(table(
+    ['Symbol', 'Call', 'Source', 'Advised', 'Target', 'Stop', 'Published by', ''],
+    shared.map((a) => [
+      el('strong', {}, a.symbol),
+      el('span', { className: a.action === 'BUY' ? 'pos' : 'neg' }, a.action),
+      a.source,
+      a.advised_on,
+      a.target ?? '—',
+      a.stop_loss ?? '—',
+      a.author_name,
+      a.withdrawn_at
+        ? el('span', { className: 'tag off' }, 'withdrawn')
+        : withdrawButton(a),
+    ])));
+}
+
+function withdrawButton(a) {
+  const b = el('button', { className: 'ghost sm', textContent: 'Withdraw' });
+  b.onclick = async () => {
+    if (!confirm(`Withdraw the ${a.action} idea for ${a.symbol}? It stops appearing for users, `
+      + 'but stays on record for anyone who already acted on it.')) return;
+    b.disabled = true;
+    try { await api(`/api/shared-advice/${a.id}/withdraw`, { method: 'POST' }); loadSharedAdvice(); }
+    catch (e) { alert(e.message); b.disabled = false; }
+  };
+  return b;
+}
+
+$('#btn-publish').onclick = async () => {
+  const btn = $('#btn-publish');
+  btn.disabled = true;
+  msg($('#publish-msg'), '');
+  try {
+    await api('/api/shared-advice', { method: 'POST', body: publishForm.read() });
+    publishForm.clear();
+    msg($('#publish-msg'), 'Published. Every user sees it on their Ideas tab.', 'ok');
+    await loadSharedAdvice();
+  } catch (e) { msg($('#publish-msg'), e.message, 'err'); }
+  finally { btn.disabled = false; }
+};
+
 // ── admin: market scan ───────────────────────────────────────────────────────
 // The one shared-data job an admin still runs. The Top 25 is empty until it has been done once,
 // and the scheduler will not fire until 18:00 IST, so a first run has to be startable by hand.
