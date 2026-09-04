@@ -110,5 +110,61 @@ console.log('\nWhat the form refuses');
   refuses('a negative entry', () => clean({ ...ok, entry: -5 }), /positive numbers/);
 }
 
+
+console.log('\nWhy you own it: a named call outranks a screen');
+{
+  const {
+    candidateSources, pickPrimary, TOP25_WINDOW_DAYS, ADVICE_WINDOW_DAYS,
+  } = require('../services/recommendations/pickerMatchService');
+
+  const idea = (over) => ({ id: 1, symbol: 'X', source: 'Marketfeed', scope: 'mine', advised_on: '2026-06-01', ...over });
+  // Inside the 5-day screen window by default; the window itself is tested below.
+  const scan = (over) => ({ symbol: 'X', scan_date: '2026-06-08', rank: 3, ...over });
+  const buy = '2026-06-10';
+
+  // The screen is nearer in time, and still loses: "someone told me to buy X" explains buying X
+  // better than "X scored well on a list of five hundred that day".
+  const both = candidateSources(buy, [idea({ advised_on: '2026-06-01' })], [scan({ scan_date: '2026-06-09' })]);
+  check('both sources are recorded', both.length === 2, JSON.stringify(both));
+  check('the named call wins even when the screen is nearer',
+    pickPrimary(both).type === 'advice', JSON.stringify(pickPrimary(both)));
+
+  check('the screen wins when nothing named the stock',
+    pickPrimary(candidateSources(buy, [], [scan()])).type === 'top25');
+  check('nothing at all is null', pickPrimary(candidateSources(buy, [], [])) === null);
+
+  // Between two named calls, nearest to the buy wins — recency is the tie-break, not who said it.
+  const twoNamed = candidateSources(buy, [
+    idea({ id: 1, advised_on: '2026-05-20', source: 'older' }),
+    idea({ id: 2, advised_on: '2026-06-08', source: 'newer', scope: 'shared', author_name: 'Admin' }),
+  ], []);
+  check('the nearer of two named calls wins', pickPrimary(twoNamed).source === 'newer',
+    JSON.stringify(pickPrimary(twoNamed)));
+  check('and a published call is labelled as one', pickPrimary(twoNamed).type === 'shared_advice');
+}
+
+console.log('\nThe two windows, which are a judgement and not a fact');
+{
+  const {
+    candidateSources, TOP25_WINDOW_DAYS, ADVICE_WINDOW_DAYS,
+  } = require('../services/recommendations/pickerMatchService');
+  const buy = '2026-06-10';
+  const daysBefore = (n) => new Date(Date.parse(`${buy}T00:00:00Z`) - n * 86400000).toISOString().slice(0, 10);
+
+  const adviceAt = (n) => candidateSources(buy, [{ id: 1, symbol: 'X', source: 's', scope: 'mine', advised_on: daysBefore(n) }], []);
+  check(`a call ${ADVICE_WINDOW_DAYS} days back still counts`, adviceAt(ADVICE_WINDOW_DAYS).length === 1);
+  check('a day beyond that does not', adviceAt(ADVICE_WINDOW_DAYS + 1).length === 0);
+
+  const scanAt = (n) => candidateSources(buy, [], [{ symbol: 'X', scan_date: daysBefore(n), rank: 1 }]);
+  check(`a screen ${TOP25_WINDOW_DAYS} days back still counts`, scanAt(TOP25_WINDOW_DAYS).length === 1);
+  check('a day beyond that does not', scanAt(TOP25_WINDOW_DAYS + 1).length === 0);
+  check('a screen inside the advice window but outside its own does not count',
+    scanAt(20).length === 0, 'the two windows must not be sharing a limit');
+
+  // A call made AFTER the buy cannot have caused it, however close.
+  const after = candidateSources(buy, [{ id: 1, symbol: 'X', source: 's', scope: 'mine', advised_on: '2026-06-11' }], []);
+  check('a call made after the buy explains nothing', after.length === 0);
+}
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed ? 1 : 0);

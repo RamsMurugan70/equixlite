@@ -68,10 +68,10 @@ shares the scan lock and two scans cannot race. `GET /api/admin/ops` reports wha
 cd server && npm test
 ```
 
-244 assertions, no network required: the vault's crypto, FIFO lot matching against hand-worked
+256 assertions, no network required: the vault's crypto, FIFO lot matching against hand-worked
 tax cases, tenant isolation at the data level, the indicators and GARCH against synthetic data
 with known parameters, the scoring port at every threshold boundary, Ask the Data's query
-scoping, the account rules (three per user, one broker each), the admin/trader boundary, and how an idea's outcome is judged (including when the price history does not reach back to the call).
+scoping, the account rules (three per user, one broker each), the admin/trader boundary, and how an idea's outcome is judged (including when the price history does not reach back to the call), and how a holding is attributed to the idea or screen that best explains it.
 
 ## Running it
 

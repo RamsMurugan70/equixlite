@@ -1,20 +1,31 @@
-// Matches currently-held equity positions against the daily Nifty 500 Top 25 — "did this
-// screen well around when I bought it?" One row per currently-held symbol per portfolio;
-// a fully-exited position drops off (the orders stay on record, just not shown here).
+// Why do you own what you own? Every currently-held position is attributed to whatever best
+// explains the buy: an idea you recorded, an idea published to you, or the daily Nifty 500 Top
+// 25. One row per held symbol per portfolio; a fully-exited position drops off (the orders stay
+// on record, just not shown here).
 //
-// SCOPED DOWN FROM THE DESKTOP VERSION. That one also matches against Midcap/Smallcap/
-// Microcap Top-25s and Investing.com ProPicks — EquixLite doesn't scan those universes yet
-// (see universeService.js) and hasn't got a ProPicks sync, so this is Nifty 500 only for now.
-// Same trailing-window idea, though: a buy counts as matched if the stock was in the Top 25 on
-// the buy date or any of the WINDOW_DAYS before it — a Monday screen followed by a Wednesday
-// buy still counts, an exact-day requirement would miss almost everything.
+// A NAMED CALL OUTRANKS A SCREEN. If a buy matches both an idea and the Top 25, the idea gets
+// the credit: someone saying "buy RELIANCE" is a better account of why you bought RELIANCE than
+// it having scored well on a list of five hundred that day. Without that rule the Top 25 absorbs
+// trades it did not prompt and its hit rate flatters itself.
+//
+// TWO DIFFERENT WINDOWS, FOR TWO DIFFERENT KINDS OF TRIGGER. A screen is a this-week prompt —
+// act on it or the ranking has moved on. A named call with a six-month timeframe can reasonably
+// be acted on weeks later. Using one window for both would either lose most real advice matches
+// or let a stale screen claim a buy it had nothing to do with.
+//
+// STILL NIFTY 500 ONLY on the screen side: EquixLite does not scan Midcap/Smallcap/Microcap yet
+// (see universeService.js). ProPicks stays in the desktop app by design — EquixLite users are
+// not assumed to hold that subscription.
 const repo = require('../../repositories/portfolioRepository');
 const market = require('../../repositories/marketRepository');
+const advice = require('../../repositories/adviceRepository');
 const holdings = require('../portfolio/holdingsService');
 const fifo = require('../portfolio/fifoService');
 const universe = require('../universe/universeService');
 
-const WINDOW_DAYS = 5;
+const TOP25_WINDOW_DAYS = 5;
+const ADVICE_WINDOW_DAYS = 45;
+const WINDOW_DAYS = TOP25_WINDOW_DAYS;
 const DAY_MS = 86400000;
 const daysBetween = (a, b) => Math.round((new Date(`${b}T00:00:00Z`) - new Date(`${a}T00:00:00Z`)) / DAY_MS);
 const round2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
@@ -73,46 +84,134 @@ async function matchedRows(userId) {
     ? new Date(new Date(`${earliestBuy}T00:00:00Z`).getTime() - WINDOW_DAYS * DAY_MS).toISOString().slice(0, 10)
     : null;
 
-  const appearances = windowFrom
-    ? await market.topAppearances(universe.UNIVERSE, symbols, windowFrom, today) : [];
+  const [appearances, mine, shared] = await Promise.all([
+    windowFrom ? market.topAppearances(universe.UNIVERSE, symbols, windowFrom, today) : [],
+    advice.listMine(userId),
+    advice.listShared(),
+  ]);
+
   const bySymbolAppearances = new Map();
   for (const a of appearances) {
     if (!bySymbolAppearances.has(a.symbol)) bySymbolAppearances.set(a.symbol, []);
     bySymbolAppearances.get(a.symbol).push(a);
   }
 
-  return rows.map((r) => {
-    if (!r.buyDate) return { ...r, matched: false, matchDetail: null };
-    const list = bySymbolAppearances.get(r.symbol) || [];
-    // The closest appearance at/before the buy date, within the window — a screen from further
-    // back is a weaker explanation for the same buy, so the nearest one wins.
-    let best = null;
+  // Only BUY calls can explain a position you hold. A sell call on the same stock is a different
+  // conversation and would be a nonsense attribution here.
+  const bySymbolAdvice = new Map();
+  const addAdvice = (list, scope) => {
     for (const a of list) {
-      if (a.scan_date > r.buyDate) continue;
-      const gap = daysBetween(a.scan_date, r.buyDate);
-      if (gap > WINDOW_DAYS) continue;
-      if (!best || gap < best.gap) best = { ...a, gap };
+      if (a.action !== 'BUY') continue;
+      if (!bySymbolAdvice.has(a.symbol)) bySymbolAdvice.set(a.symbol, []);
+      bySymbolAdvice.get(a.symbol).push({ ...a, scope });
     }
+  };
+  addAdvice(mine, 'mine');
+  addAdvice(shared, 'shared');
+
+  return rows.map((r) => {
+    if (!r.buyDate) return { ...r, matched: false, matchDetail: null, sources: [], primary: null };
+    const sources = candidateSources(
+      r.buyDate, bySymbolAdvice.get(r.symbol) || [], bySymbolAppearances.get(r.symbol) || []);
+    const primary = pickPrimary(sources);
     return {
       ...r,
-      matched: !!best,
-      matchDetail: !best ? null
-        : (best.gap === 0 ? `Top 25 on the buy day (rank #${best.rank})`
-          : `Top 25 ${best.gap}d earlier (rank #${best.rank})`),
+      sources,
+      primary,
+      matched: Boolean(primary),
+      matchDetail: primary ? primary.detail : null,
     };
   });
+}
+
+/**
+ * Everything that could account for a buy on `buyDate`, nearest first.
+ *
+ * Pure, and exported, because the two windows are a judgement rather than a fact: 45 days for a
+ * named call, 5 for a screen. Both are wrong in some direction for somebody, so they should be
+ * easy to see, argue with, and test.
+ */
+function candidateSources(buyDate, adviceRows, scanRows) {
+  const sources = [];
+
+  for (const a of adviceRows) {
+    if (a.advised_on > buyDate) continue;
+    const gap = daysBetween(a.advised_on, buyDate);
+    if (gap > ADVICE_WINDOW_DAYS) continue;
+    const label = a.scope === 'shared' ? 'Published idea' : 'Your idea';
+    sources.push({
+      type: a.scope === 'shared' ? 'shared_advice' : 'advice',
+      gap,
+      label,
+      source: a.source,
+      author: a.author_name || null,
+      adviceId: a.id,
+      detail: `${label} (${a.source})${gap === 0 ? ', same day' : `, ${gap}d earlier`}`,
+    });
+  }
+
+  // Only the nearest scan: the Top 25 is one list, and the same stock sitting on it for six days
+  // running is one reason, not six.
+  let bestScan = null;
+  for (const a of scanRows) {
+    if (a.scan_date > buyDate) continue;
+    const gap = daysBetween(a.scan_date, buyDate);
+    if (gap > TOP25_WINDOW_DAYS) continue;
+    if (!bestScan || gap < bestScan.gap) bestScan = { ...a, gap };
+  }
+  if (bestScan) {
+    sources.push({
+      type: 'top25',
+      gap: bestScan.gap,
+      label: 'Top 25',
+      rank: bestScan.rank,
+      detail: bestScan.gap === 0
+        ? `Top 25 on the buy day (rank #${bestScan.rank})`
+        : `Top 25 ${bestScan.gap}d earlier (rank #${bestScan.rank})`,
+    });
+  }
+
+  return sources.sort((a, b) => a.gap - b.gap);
+}
+
+/** Named calls first, nearest wins within them; the screen only when nothing named the stock. */
+function pickPrimary(sources) {
+  const named = sources.filter((s) => s.type !== 'top25').sort((a, b) => a.gap - b.gap);
+  return named[0] || sources.find((s) => s.type === 'top25') || null;
 }
 
 async function pickerMatches(userId) {
   const rows = await matchedRows(userId);
   if (!rows.length) return { rows: [], summary: emptySummary(), universe: universe.UNIVERSE };
 
+  // Per source, so "which of these is actually leading me to good positions" is answerable
+  // rather than merely implied by a matched/unmatched split.
+  const SOURCE_LABEL = {
+    advice: 'Your own ideas',
+    shared_advice: 'Published ideas',
+    top25: 'Top 25',
+    none: 'Nothing on record',
+  };
+  const byType = new Map();
+  for (const r of rows) {
+    const key = r.primary?.type || 'none';
+    if (!byType.has(key)) byType.set(key, []);
+    byType.get(key).push(r);
+  }
+  const bySource = [...byType.entries()]
+    .map(([type, list]) => ({ type, label: SOURCE_LABEL[type] || type, ...summarize(list) }))
+    // Attributed sources first, "nothing on record" last: it is the leftovers, not a contender.
+    .sort((a, b) => (a.type === 'none' ? 1 : 0) - (b.type === 'none' ? 1 : 0)
+      || (b.avgReturnPct ?? -Infinity) - (a.avgReturnPct ?? -Infinity));
+
   return {
     universe: universe.UNIVERSE,
-    windowDays: WINDOW_DAYS,
+    windowDays: TOP25_WINDOW_DAYS,
+    adviceWindowDays: ADVICE_WINDOW_DAYS,
     // openLots is internal detail for the matcher, not for this page's table.
     rows: rows.map(({ openLots: _openLots, ...r }) => r)
       .sort((a, b) => (b.matched - a.matched) || (b.pnlPct ?? -999) - (a.pnlPct ?? -999)),
+    bySource,
     summary: {
       matched: summarize(rows.filter((r) => r.matched)),
       unmatched: summarize(rows.filter((r) => !r.matched)),
@@ -168,4 +267,8 @@ async function untrackedHoldings(userId) {
   };
 }
 
-module.exports = { pickerMatches, untrackedHoldings };
+module.exports = {
+  pickerMatches, untrackedHoldings,
+  // The attribution rules, exported so they can be tested without a database behind them.
+  candidateSources, pickPrimary, TOP25_WINDOW_DAYS, ADVICE_WINDOW_DAYS,
+};

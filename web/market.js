@@ -397,10 +397,20 @@ async function renderDailySync(body) {
   body.replaceChildren(...nodes);
 }
 
-// ── recommendations: your trades vs the top 25 ─────────────────────────────
-function pmStat(label, s) {
-  return stat(label, s.count ? `${s.winRate ?? '—'}%` : '—',
-    s.count ? `${s.count} trade(s) · avg ${s.avgReturnPct ?? '—'}%` : 'none');
+// ── recommendations: why you own what you own ──────────────────────────────
+// A tag coloured by which kind of source claimed the buy, so the table can be read down the
+// column: green is something you or the app actually called, grey is nothing on record.
+const SOURCE_TAG = { advice: 'src-orders', shared_advice: 'admin', top25: 'src-override' };
+
+function sourceTag(r) {
+  if (!r.primary) return el('span', { className: 'tag user' }, 'nothing on record');
+  const tag = el('span', { className: `tag ${SOURCE_TAG[r.primary.type] || 'user'}` }, r.primary.detail);
+  // More than one source fits; the strongest is shown and the rest sit in the tooltip rather
+  // than widening every row for the uncommon case.
+  if (r.sources.length > 1) {
+    tag.title = `also: ${r.sources.filter((x) => x !== r.primary).map((x) => x.detail).join(' · ')}`;
+  }
+  return tag;
 }
 
 async function renderPickerMatches() {
@@ -409,21 +419,32 @@ async function renderPickerMatches() {
 
   const multi = new Set(d.rows.map((r) => r.portfolioName)).size > 1;
   const box = el('div', { className: 'panel-inset' },
-    el('h3', {}, 'Your trades vs the Top 25'),
+    el('h3', {}, 'Why you own what you own'),
     el('p', { className: 'muted small' },
-      `Nifty 500 only for now. A trade counts as matched if the stock was in the Top 25 on the `
-      + `buy day or up to ${d.windowDays} day(s) before it.`),
-    el('div', { className: 'stats' },
-      pmStat('Matched — win rate', d.summary.matched),
-      pmStat('Unmatched — win rate', d.summary.unmatched)));
+      `Each holding is credited to whatever best explains the buy. A named idea outranks a `
+      + `screen: it counts if the call came within ${d.adviceWindowDays} days of the buy, `
+      + `against ${d.windowDays} for the Top 25, since a screen is a this-week prompt and a `
+      + `call with a months-long timeframe is not.`));
+
+  if (d.bySource?.length) {
+    box.append(table(['Source', 'Holdings', 'Invested', 'Win rate', 'Avg return'],
+      d.bySource.map((x) => [
+        x.type === 'none' ? el('span', { className: 'muted' }, x.label) : x.label,
+        String(x.count),
+        inr(x.invested),
+        x.winRate === null ? '—' : `${x.winRate}%`,
+        x.avgReturnPct === null ? '—'
+          : el('span', { className: x.avgReturnPct >= 0 ? 'pos' : 'neg' },
+            `${x.avgReturnPct >= 0 ? '+' : ''}${x.avgReturnPct}%`),
+      ])));
+  }
 
   box.append(table(
     [...(multi ? ['Portfolio'] : []), 'Symbol', 'Why', 'Qty', 'Avg cost', 'LTP', 'P&L'],
     d.rows.map((r) => [
       ...(multi ? [el('span', { className: 'muted' }, r.portfolioName)] : []),
       symbolLink(r.symbol),
-      r.matchDetail ? el('span', { className: 'tag src-orders' }, r.matchDetail)
-        : el('span', { className: 'tag user' }, 'not matched'),
+      sourceTag(r),
       r.quantity,
       r.avgCost ? r.avgCost.toFixed(2) : '—',
       r.ltp ? r.ltp.toFixed(2) : '—',
@@ -518,9 +539,10 @@ async function renderUntracked(body) {
   const nodes = [];
 
   nodes.push(el('p', { className: 'muted small' },
-    `Nifty 500 only, and only as far back as this app's own scan history reaches — a stock `
-    + `bought before scanning started will land here even if it would have qualified. Treat `
-    + `this as unverified, not a verdict.`));
+    'Holdings with nothing on record to explain the buy — no idea you logged, none published to '
+    + 'you, and not in the Top 25 around the time. Absence of a record is not a verdict on the '
+    + "stock: anything bought before you started logging ideas, or before this app's own scan "
+    + 'history reaches, lands here regardless of how good it was.'));
 
   if (!d.rows.length) {
     nodes.push(el('p', { className: 'muted' }, d.totals.positions === 0
