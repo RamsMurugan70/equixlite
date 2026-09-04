@@ -1,0 +1,87 @@
+# EquixLite behind a Cloudflare Tunnel, instead of Caddy and a certificate of its own.
+#
+# WHY THIS EXISTS. The Caddy stack in docker-compose.yml needs a domain you control, because
+# Let's Encrypt will only issue for one. The wildcard-DNS services that look like a way around
+# that are not: sslip.io and nip.io are absent from the Public Suffix List, so Let's Encrypt
+# counts every certificate ever issued for any *.sslip.io against ONE limit of 50 per week,
+# shared with the whole internet. It is normally exhausted, and a failed issuance here is not a
+# cosmetic problem — COOKIE_SECURE is true in production, so with no HTTPS the session cookie is
+# dropped and signing in silently does nothing.
+#
+# A tunnel sidesteps the whole question. cloudflared dials OUT to Cloudflare and serves the app
+# through it, so Cloudflare terminates TLS on a hostname it already holds a certificate for.
+#
+# NOTHING LISTENS ON THE PUBLIC INTERFACE. No ports are published, so 80 and 443 stay shut and
+# the box needs no firewall rule to be safe. The app is reachable only through the tunnel.
+#
+#   docker compose -f docker-compose.tunnel.yml up -d
+#
+# See DEPLOY-TUNNEL.md for the two-step first boot — the quick-tunnel hostname is not knowable
+# until cloudflared has started, and PUBLIC_URL needs it.
+
+services:
+  equixlite:
+    build: .
+    image: equixlite:latest
+    restart: unless-stopped
+    # expose, not ports: reachable from cloudflared on the internal network and from nowhere else.
+    expose:
+      - "5070"
+    environment:
+      NODE_ENV: production
+      PORT: "5070"
+      DB_PATH: /data/equixlite.db
+      # Cloudflare terminates TLS and sets X-Forwarded-Proto: https, which is what the app reads
+      # to decide the connection was secure. The hop from cloudflared to the app is plain http
+      # over the internal network and never leaves the host.
+      COOKIE_SECURE: "true"
+      SCHEDULER: "true"
+      # The tunnel hostname, e.g. https://something-random-here.trycloudflare.com. Not known on
+      # the very first boot — see DEPLOY-TUNNEL.md. Only the displayed broker redirect URL
+      # depends on it, so a placeholder boots fine and is corrected in step two.
+      PUBLIC_URL: "${PUBLIC_URL:?set PUBLIC_URL to the tunnel https:// hostname}"
+      SESSION_SECRET: "${SESSION_SECRET:?generate with openssl rand -hex 32}"
+      CREDENTIAL_KEY: "${CREDENTIAL_KEY:?generate with openssl rand -hex 32, and keep a copy}"
+      TZ: Asia/Kolkata
+    volumes:
+      - equix-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5070/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    # TWO MODES, and which one you get depends on whether TUNNEL_TOKEN is set.
+    #
+    #   unset — a quick tunnel. No Cloudflare account, no domain, works immediately. The hostname
+    #           is random and CHANGES EVERY RESTART, which means PUBLIC_URL goes stale and anyone
+    #           you sent the old link to loses it. Fine for a trial you are watching; not for
+    #           people you have handed a URL to.
+    #
+    #   set   — a named tunnel: one stable hostname that survives restarts. Needs a free
+    #           Cloudflare account with a domain added to it, then Zero Trust > Networks >
+    #           Tunnels > Create, pointed at http://equixlite:5070. Paste the token into .env.
+    #
+    # --no-autoupdate because an unattended binary replacing itself mid-week is a worse failure
+    # than running a slightly older one; the image is how it gets updated.
+    command: >
+      sh -c 'if [ -n "$${TUNNEL_TOKEN}" ];
+             then exec cloudflared tunnel --no-autoupdate run --token "$${TUNNEL_TOKEN}";
+             else exec cloudflared tunnel --no-autoupdate --url http://equixlite:5070; fi'
+    environment:
+      TUNNEL_TOKEN: "${TUNNEL_TOKEN:-}"
+    depends_on:
+      - equixlite
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  equix-data:

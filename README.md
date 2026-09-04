@@ -46,14 +46,28 @@ web/              the whole UI - plain HTML/JS, no build step. Seven groups
                   (Dashboard, Action Queue, Portfolio, Performance, Ideas,
                   Research, Data), each with its own sub-views
 Dockerfile        multi-stage, non-root
-docker-compose.yml  app + Caddy (TLS)
+docker-compose.yml         app + Caddy (TLS on your own domain)
+docker-compose.tunnel.yml  app + Cloudflare Tunnel (no domain needed)
 DEPLOY.md         the deployment guide
+DEPLOY-TUNNEL.md  the same, for when you have no domain yet
 ```
 
 ## Deploying
 
-See **[DEPLOY.md](DEPLOY.md)**. Short version: a small VPS, `docker compose up -d --build`, and
-Caddy handles TLS on your domain automatically.
+Two routes, and which one you want depends on whether you have a domain.
+
+**With a domain** — see **[DEPLOY.md](DEPLOY.md)**. A small VPS, `docker compose up -d --build`,
+and Caddy fetches a Let's Encrypt certificate for it automatically.
+
+**Without one** — see **[DEPLOY-TUNNEL.md](DEPLOY-TUNNEL.md)**. `cloudflared` dials out to
+Cloudflare, which serves the app over HTTPS on a hostname it already holds a certificate for. No
+domain, no Cloudflare account, and no open ports — the tunnel is outbound, so 80 and 443 stay
+shut. The trade-off is that a quick-tunnel hostname changes on every restart.
+
+Do not substitute sslip.io or nip.io for a domain on the Caddy route. Neither is on the Public
+Suffix List, so Let's Encrypt counts all certificates for `*.sslip.io` against one limit of 50 a
+week shared with the whole internet, and issuance normally fails. Since `COOKIE_SECURE` is true
+in production, no HTTPS means the session cookie is dropped and signing in silently does nothing.
 
 In production the app **refuses to boot** on an unsafe configuration rather than starting and
 being quietly insecure — a missing `SESSION_SECRET` or `CREDENTIAL_KEY`, `COOKIE_SECURE` not
