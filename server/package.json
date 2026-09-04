@@ -17,6 +17,7 @@
     "test:askdata": "node src/scripts/testAskData.js",
     "test:accounts": "node src/scripts/testAccounts.js",
     "test:advice": "node src/scripts/testAdvice.js",
+    "repair-symbols": "node src/scripts/repairBrokerSymbols.js",
     "import-equix": "node src/scripts/importEquixHistory.js",
     "backup": "node -e \"require('./src/services/ops/backup').backupDatabase().then(r=>console.log(r.file))\"",
     "scan": "node -e \"require('./src/services/universe/universeService').runScan({trigger:'cli'}).then(r=>console.log(JSON.stringify(r,null,2)))\""

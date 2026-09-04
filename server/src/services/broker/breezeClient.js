@@ -15,6 +15,7 @@ const crypto = require('crypto');
 const https = require('https');
 const credentials = require('../../repositories/credentialRepository');
 const vault = require('../security/vault');
+const { toNseSymbol } = require('./symbolMap');
 
 const HOST = 'api.icicidirect.com';
 const BASE_PATH = '/breezeapi/api/v1';
@@ -307,11 +308,13 @@ async function fetchHoldings(userId) {
     // row, the portfolio quantity is all there is.
     const qty = Number(h.quantity ?? h.total_quantity) || pr.qty || 0;
     return {
-      // Broker code, kept as-is here. Normalising to the NSE symbol is the importer's job, not
-      // the client's — the desktop app learned that the hard way when RELIND and RELIANCE became
-      // two stocks. This layer reports what the broker said.
+      // Both, deliberately. `brokerSymbol` is what ICICI said and is kept for provenance;
+      // `symbol` is the NSE symbol everything downstream prices, scores and ranks by. This is
+      // the only layer that knows it is talking to ICICI, so it is the right place to translate
+      // — and leaving it to a later "importer" meant, in practice, that nobody did it and every
+      // holding whose code differs arrived unpriceable.
       brokerSymbol: code,
-      symbol: code,
+      symbol: toNseSymbol(code),
       exchange: h.exchange_code || pr.exchange || 'NSE',
       qty,
       avgCost: pr.avgCost || Number(h.average_price) || 0,
@@ -346,7 +349,7 @@ async function fetchTradesOn(userId, { from, to, exchange }) {
 
     return {
       brokerSymbol: t.stock_code,
-      symbol: t.stock_code,
+      symbol: toNseSymbol(t.stock_code),
       tradeDate: toYMD(t.trade_date || t.order_date || t.exchange_trade_time),
       // Kept rather than collapsed into the date. FIFO sorts same-day fills by time, and
       // without it the order falls back to insert order — which is import order, not trade
