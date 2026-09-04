@@ -430,6 +430,48 @@ async function renderTax(body) {
 const gainText = (g) => el('span', { className: g >= 0 ? 'pos' : 'neg' }, `${g >= 0 ? '+' : ''}${inr(g)}`);
 
 
+// The daily login, as three controls: open the broker's page, paste what it gives back, connect.
+//
+// EXTRACTED BECAUSE TWO SCREENS NEED IT. Brokers is where keys are managed; Daily Sync is where
+// the login actually gets done each morning, and sending someone to another tab to do the one
+// thing that page exists to prompt is how a token never gets pasted. One implementation, so the
+// wording and the endpoint cannot drift apart.
+//
+// The two brokers differ in what they hand back and that difference is stated rather than
+// smoothed over: ICICI shows a session token on its page, Zerodha redirects with request_token
+// in the URL and may connect this app on its own if the redirect URL is registered.
+function connectControls(b, out, onDone) {
+  const open = el('button', { textContent: 'Open broker login' });
+  open.onclick = async () => {
+    try {
+      const r = await api('/api/brokers/' + b.broker + '/login-url');
+      window.open(r.loginUrl, '_blank', 'noopener');
+      msg(out, b.broker === 'zerodha'
+        ? 'If your redirect URL points here, that tab will connect on its own — reload this page '
+          + 'when it does. Otherwise copy request_token from its address bar and paste it below.'
+        : 'After logging in, copy the API session token from that page and paste it below.',
+      'warn');
+    } catch (e) { msg(out, e.message, 'err'); }
+  };
+
+  const tok = el('input', {
+    placeholder: b.broker === 'zerodha' ? 'request_token' : 'API session token',
+    autocomplete: 'off',
+  });
+  const go = el('button', { className: 'ghost', textContent: 'Connect' });
+  const submit = () => {
+    if (!tok.value.trim()) { msg(out, 'Paste the token first.', 'err'); return; }
+    run(go, out, '/api/brokers/' + b.broker + '/connect', { token: tok.value.trim() },
+      (r) => 'Connected until ' + fmtDate(r.expiresAt) + '.', onDone);
+  };
+  go.onclick = submit;
+  // Pasting a token and pressing Enter is the whole interaction; making it need the mouse for
+  // the last step is a small daily annoyance.
+  tok.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+
+  return [open, tok, go];
+}
+
 // -- brokers -----------------------------------------------------------------
 // The two flows differ, and pretending otherwise would make one of them confusing:
 //
@@ -507,28 +549,7 @@ async function renderBrokers(body) {
         };
         actions.append(hold, ord, off);
       } else {
-        const open = el('button', { textContent: 'Open broker login' });
-        open.onclick = async () => {
-          try {
-            const r = await api('/api/brokers/' + b.broker + '/login-url');
-            window.open(r.loginUrl, '_blank', 'noopener');
-            msg(out, b.broker === 'zerodha'
-              ? 'If your redirect URL points here, that tab will connect on its own - reload this '
-                + 'page when it does. Otherwise copy request_token from its address bar and paste below.'
-              : 'After logging in, copy the API session token from the page and paste it below.',
-            'warn');
-          } catch (e) { msg(out, e.message, 'err'); }
-        };
-        const tok = el('input', {
-          placeholder: b.broker === 'zerodha' ? 'request_token' : 'API session token',
-        });
-        const go = el('button', { className: 'ghost', textContent: 'Connect' });
-        go.onclick = () => {
-          if (!tok.value.trim()) { msg(out, 'Paste the token first.', 'err'); return; }
-          run(go, out, '/api/brokers/' + b.broker + '/connect', { token: tok.value.trim() },
-            (r) => 'Connected until ' + fmtDate(r.expiresAt) + '.', () => openTab('brokers'));
-        };
-        actions.append(open, tok, go);
+        actions.append(...connectControls(b, out, () => openTab('brokers')));
       }
 
       const forget = el('button', { className: 'danger sm', textContent: 'Remove keys' });

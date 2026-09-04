@@ -124,9 +124,15 @@ async function getStatus(userId, { sinceDays = 30 } = {}) {
   const byBroker = new Map(brokerStatus.map((b) => [b.broker, b]));
   const connections = portfolios.filter((p) => p.broker).map((p) => {
     const b = byBroker.get(p.broker) || { configured: false, connected: false };
+    // connectable and dailyNote come from the catalog rather than being decided here: Kotak can
+    // hold credentials but has no session flow, and a page that offers it a Connect button is
+    // promising something that cannot happen.
+    const cat = catalog.get(p.broker) || {};
     return {
       portfolioId: p.id, portfolioName: p.name, broker: p.broker, label: LABEL[p.broker],
       configured: !!b.configured, connected: !!b.connected,
+      connectable: cat.connectable !== false,
+      dailyNote: cat.dailyNote || null,
       sessionExpiresAt: b.sessionExpiresAt || null,
     };
   });

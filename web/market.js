@@ -343,6 +343,60 @@ async function renderActionQueue(body) {
   }
 }
 
+
+/**
+ * One broker's connection, with the daily login attached.
+ *
+ * Three states, and each says what to do next rather than only what is wrong: connected (and
+ * until when), keys saved but no session for today (log in, right here), or no keys at all
+ * (which no amount of logging in will fix, so it points at the Brokers tab instead).
+ */
+function connectionCard(c) {
+  const out = el('div', { className: 'msg', hidden: true });
+  const card = el('div', { className: 'bcard' });
+
+  card.append(el('div', { className: 'brow' },
+    el('strong', {}, c.portfolioName),
+    el('span', { className: 'muted' }, c.label),
+    c.connected
+      ? el('span', { className: 'tag src-orders' }, 'Connected')
+      : el('span', { className: `tag ${c.configured && c.connectable ? 'pend' : 'user'}` },
+        // "Not connected today" is a prompt to go and log in. For a broker with no session flow
+        // at all it reads as a failure the user could fix by trying harder.
+        // eslint-disable-next-line no-nested-ternary
+        !c.configured ? 'No keys yet' : (c.connectable ? 'Not connected today' : 'Keys saved'))));
+
+  if (c.connected) {
+    card.append(el('p', { className: 'muted small' },
+      `Session valid until ${fmtDate(c.sessionExpiresAt)}.`));
+    const off = el('button', { className: 'ghost sm', textContent: 'Disconnect' });
+    off.onclick = async () => {
+      if (!confirm(`Disconnect ${c.label}? Reconnecting means logging in at the broker again.`)) return;
+      await api(`/api/brokers/${c.broker}/disconnect`, { method: 'POST' });
+      openTab('dailysync');
+    };
+    card.append(el('div', { className: 'row' }, off));
+  } else if (c.configured && !c.connectable) {
+    // Credentials stored, but this app cannot establish a session for this broker yet. Offering
+    // the login controls would be promising something that cannot happen.
+    card.append(el('p', { className: 'muted small' }, c.dailyNote || ''));
+  } else if (c.configured) {
+    // The broker's own words for its daily step, from the catalog — the page does not keep a
+    // second copy that can drift from the one on the Brokers tab.
+    card.append(el('p', { className: 'muted small' }, c.dailyNote || ''));
+    card.append(el('div', { className: 'row' },
+      ...connectControls(c, out, () => openTab('dailysync'))));
+  } else {
+    // No key means no login will help — say so and point at where it is fixed.
+    card.append(el('p', { className: 'muted small' },
+      `No API key saved for ${c.label} yet. Add it under Data → Brokers, then come back here to `
+      + 'log in.'));
+  }
+
+  card.append(out);
+  return card;
+}
+
 // ── daily sync ───────────────────────────────────────────────────────────────
 async function renderDailySync(body) {
   const d = await api('/api/daily-sync/status');
@@ -363,10 +417,10 @@ async function renderDailySync(body) {
     () => openTab('dailysync'));
   setToolbar(btn);
 
-  nodes.push(el('div', { className: 'stats' },
-    ...d.connections.map((c) => stat(c.portfolioName,
-      c.connected ? 'Connected' : (c.configured ? 'Not connected today' : 'No keys yet'),
-      c.label))));
+  // Connection cards, not just status. This is the page someone opens each morning to get the
+  // day's data in, and both brokers need a fresh login before that can happen — so the login
+  // lives here rather than on another tab that has to be gone looking for.
+  nodes.push(el('div', { className: 'cards' }, d.connections.map((c) => connectionCard(c))));
   nodes.push(out);
 
   const todayBox = el('div', { className: 'panel-inset' }, el('h3', {}, `Today (${d.today})`));
