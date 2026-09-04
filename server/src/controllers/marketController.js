@@ -45,7 +45,9 @@ async function requirePortfolio(userId, raw) {
 // ── Recommendations ──────────────────────────────────────────────────────────
 async function topPicks(req, res, next) {
   try {
-    const picks = await universe.topPicks();
+    // An unknown universe falls back to the Nifty 500 rather than erroring: a stale bookmark
+    // should show the default list, not a failure.
+    const picks = await universe.topPicks(String(req.query.universe || '').toUpperCase());
     // Which of the picks the user already owns. Recommending something already held, without
     // saying so, is the fastest way for this list to look like it is not paying attention.
     const overview = await holdings.getOverview(req.user.id, { live: false });

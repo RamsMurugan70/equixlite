@@ -12,12 +12,50 @@ const market = require('../../repositories/marketRepository');
 const yahoo = require('../market/yahoo');
 const scoring = require('../scoring/scoreService');
 
-const UNIVERSE = 'NIFTY500';
 const TOP_N = 25;
-const CONSTITUENTS = [
-  'https://niftyindices.com/IndexConstituent/ind_nifty500list.csv',
-  'https://archives.nseindia.com/content/indices/ind_nifty500list.csv',
-];
+
+// The four rankings, and where each one's membership comes from. Sources are tried in order:
+// niftyindices is authoritative, the NSE archive is the fallback when it is unreachable.
+//
+// Note the microcap filename — `ind_niftymicrocap250_list.csv`, with an underscore the other
+// three do not have. That is NSE's inconsistency, not a typo here.
+const UNIVERSES = {
+  NIFTY500: {
+    label: 'Nifty 500',
+    minRows: 400,
+    sources: [
+      'https://niftyindices.com/IndexConstituent/ind_nifty500list.csv',
+      'https://archives.nseindia.com/content/indices/ind_nifty500list.csv',
+    ],
+  },
+  MIDCAP: {
+    label: 'Nifty Midcap 150',
+    minRows: 120,
+    sources: [
+      'https://niftyindices.com/IndexConstituent/ind_niftymidcap150list.csv',
+      'https://archives.nseindia.com/content/indices/ind_niftymidcap150list.csv',
+    ],
+  },
+  SMALLCAP: {
+    label: 'Nifty Smallcap 250',
+    minRows: 200,
+    sources: [
+      'https://niftyindices.com/IndexConstituent/ind_niftysmallcap250list.csv',
+      'https://archives.nseindia.com/content/indices/ind_niftysmallcap250list.csv',
+    ],
+  },
+  MICROCAP: {
+    label: 'Nifty Microcap 250',
+    minRows: 200,
+    sources: [
+      'https://niftyindices.com/IndexConstituent/ind_niftymicrocap250_list.csv',
+      'https://archives.nseindia.com/content/indices/ind_niftymicrocap250_list.csv',
+    ],
+  },
+};
+const UNIVERSE_KEYS = Object.keys(UNIVERSES);
+// Kept so callers that never asked about universes keep working and keep meaning Nifty 500.
+const UNIVERSE = 'NIFTY500';
 
 // Only trends worth acting on make the list. A high score on a stock in a downtrend is a
 // description of the past; these two say the trend is intact (STRONG_UPTREND) or intact and
@@ -62,10 +100,11 @@ function splitCsvLine(line) {
   return cells;
 }
 
-/** Refresh the symbol master from NSE. Falls back to what is already stored. */
-async function refreshConstituents() {
+/** One index's constituents, from whichever source answers first. */
+async function fetchConstituents(key) {
+  const cfg = UNIVERSES[key];
   let lastError = null;
-  for (const url of CONSTITUENTS) {
+  for (const url of cfg.sources) {
     try {
       const res = await fetch(url, {
         headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'text/csv,*/*' },
@@ -73,18 +112,53 @@ async function refreshConstituents() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const rows = parseCsv(await res.text());
-      // A list of 30 means the index page changed shape and we parsed a fragment. Overwriting
-      // 500 good rows with that would quietly shrink the universe.
-      if (rows.length < 400) throw new Error(`only ${rows.length} constituents parsed`);
-      await market.upsertSymbols(rows);
-      return { count: rows.length, source: url, refreshed: true };
+      // A handful of rows means the page changed shape and a fragment got parsed. Accepting it
+      // would quietly shrink the index to whatever survived, and the ranking would look normal.
+      if (rows.length < cfg.minRows) throw new Error(`only ${rows.length} constituents parsed`);
+      return { rows, source: url };
     } catch (e) { lastError = e; }
   }
-  const existing = await market.symbolCount();
-  if (existing > 0) {
-    return { count: existing, source: 'stored', refreshed: false, error: lastError?.message };
+  throw new Error(`Could not load ${cfg.label}: ${lastError?.message}`);
+}
+
+/**
+ * Membership for every index, and the symbol master refreshed from their union.
+ *
+ * An index that cannot be fetched is reported and skipped rather than failing the run: three
+ * good rankings and one stale is a better night's work than none. Only if ALL of them fail, and
+ * nothing is stored, is there nothing to scan.
+ */
+async function refreshConstituents() {
+  const members = new Map();
+  const bySymbol = new Map();
+  const failures = [];
+
+  for (const key of UNIVERSE_KEYS) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const { rows } = await fetchConstituents(key);
+      members.set(key, new Set(rows.map((r) => r.symbol)));
+      // The master is the union: one row per symbol, whichever index introduced it. Name and
+      // industry do not vary by index, so last write wins is harmless.
+      for (const r of rows) bySymbol.set(r.symbol, r);
+    } catch (e) {
+      failures.push({ universe: key, error: e.message });
+    }
   }
-  throw new Error(`Could not load the NIFTY 500 list: ${lastError?.message}`);
+
+  if (bySymbol.size) await market.upsertSymbols([...bySymbol.values()]);
+
+  const existing = bySymbol.size || await market.symbolCount();
+  if (!existing) {
+    throw new Error(`Could not load any index: ${failures.map((f) => f.error).join('; ')}`);
+  }
+  return {
+    count: bySymbol.size,
+    universes: [...members.entries()].map(([k, v]) => ({ universe: k, count: v.size })),
+    members,
+    failures,
+    refreshed: bySymbol.size > 0,
+  };
 }
 
 // ── Scan state ───────────────────────────────────────────────────────────────
@@ -115,6 +189,16 @@ async function scoreOne({ symbol, name, industry }) {
  * Individual failures are counted, not thrown: a delisted or renamed symbol (TATAMOTORS after
  * its demerger, say) must not take down a five-hundred-symbol scan.
  */
+/**
+ * Score every constituent of every index once, then rank each index from those scores.
+ *
+ * ONE PASS OVER THE UNION, NOT FOUR SCANS. The desktop app runs the four separately, staggered
+ * through the evening. Scoring is a property of the symbol and not of the list it appears on, so
+ * doing it once is both cheaper — Midcap 150 and Smallcap 250 are largely inside the Nifty 500,
+ * so the union is around 750 symbols rather than 1150 — and more correct: separate runs an hour
+ * apart can give the same stock two different scores on the same date, and nothing downstream
+ * would know which to believe.
+ */
 async function runScan({ trigger = 'manual', concurrency = 6, limit = null } = {}) {
   if (state.running) {
     throw Object.assign(new Error('A scan is already running.'), { code: 'SCAN_RUNNING' });
@@ -122,12 +206,18 @@ async function runScan({ trigger = 'manual', concurrency = 6, limit = null } = {
   Object.assign(state, {
     running: true, startedAt: new Date().toISOString(), finishedAt: null,
     scanDate: istDate(), done: 0, total: 0, scored: 0, failed: 0, lastError: null, trigger,
-    partial: false,
+    partial: false, universes: [],
   });
 
   try {
-    await refreshConstituents();
+    const constituents = await refreshConstituents();
+    const members = constituents.members;
+
     let symbols = await market.listSymbols();
+    // Only what is actually in an index this time round. The master accumulates across runs, so
+    // without this a stock dropped from every index would be scored forever.
+    const inAnyIndex = new Set([...members.values()].flatMap((set) => [...set]));
+    if (inAnyIndex.size) symbols = symbols.filter((sym) => inAnyIndex.has(sym.symbol));
     if (limit) symbols = symbols.slice(0, limit);
     state.total = symbols.length;
 
@@ -135,6 +225,7 @@ async function runScan({ trigger = 'manual', concurrency = 6, limit = null } = {
     const failures = [];
     for (let i = 0; i < symbols.length; i += concurrency) {
       const batch = symbols.slice(i, i + concurrency);
+      // eslint-disable-next-line no-await-in-loop
       const settled = await Promise.allSettled(batch.map(scoreOne));
       settled.forEach((r, j) => {
         state.done += 1;
@@ -147,7 +238,7 @@ async function runScan({ trigger = 'manual', concurrency = 6, limit = null } = {
       });
     }
 
-    await market.saveScanRows(UNIVERSE, state.scanDate, rows.map((r) => ({
+    const detailOf = (r) => ({
       ...r,
       detail: {
         rating: r.rating, emaLadder: r.emaLadder, ema50Slope: r.ema50Slope,
@@ -155,20 +246,35 @@ async function runScan({ trigger = 'manual', concurrency = 6, limit = null } = {
         technicalScore: r.technicalScore, fundamentalScore: r.fundamentalScore,
         price: r.price, note: r.note, isEtf: r.isEtf,
       },
-    })));
+    });
 
-    const ranked = rows
-      .filter((r) => QUALIFYING.has(r.emaLadder))
-      .sort((a, b) => b.combinedScore - a.combinedScore)
-      .slice(0, TOP_N)
-      .map((r, i) => ({ ...r, rank: i + 1 }));
-
-    // A PARTIAL SCAN NEVER REPLACES THE DAY'S RANKING. `limit` exists for testing, and a top 25
-    // drawn from the first dozen alphabetical symbols is not a ranking of the NIFTY 500 — but it
-    // would sit in the same table looking exactly like one. The individual scores ARE still
-    // written above: those are correct for the symbols that were actually scored.
+    // A PARTIAL SCAN NEVER REPLACES A DAY'S RANKING. `limit` exists for testing, and a top 25
+    // drawn from the first dozen alphabetical symbols is not a ranking of anything — but it would
+    // sit in the same table looking exactly like one. The individual scores ARE still written:
+    // those are correct for the symbols actually scored.
     const partial = Boolean(limit);
-    if (!partial) await market.replaceDailyTop(UNIVERSE, state.scanDate, ranked);
+    const perUniverse = [];
+
+    for (const key of UNIVERSE_KEYS) {
+      const set = members.get(key);
+      // No membership means that index could not be fetched this run. Leave its previous scan
+      // alone rather than replacing it with a ranking drawn from the wrong constituents.
+      if (!set) { perUniverse.push({ universe: key, skipped: 'constituents unavailable' }); continue; }
+
+      const mine = rows.filter((r) => set.has(r.symbol));
+      // eslint-disable-next-line no-await-in-loop
+      await market.saveScanRows(key, state.scanDate, mine.map(detailOf));
+
+      const ranked = mine
+        .filter((r) => QUALIFYING.has(r.emaLadder))
+        .sort((a, b) => b.combinedScore - a.combinedScore)
+        .slice(0, TOP_N)
+        .map((r, i) => ({ ...r, rank: i + 1 }));
+      // eslint-disable-next-line no-await-in-loop
+      if (!partial) await market.replaceDailyTop(key, state.scanDate, ranked);
+      perUniverse.push({ universe: key, scored: mine.length, top: partial ? 0 : ranked.length });
+    }
+    state.universes = perUniverse;
 
     // The scan is the daily job, so it is also where the cache gets swept. Entries that expired
     // more than a week ago are past being useful even as a stale fallback, and without this the
@@ -179,8 +285,10 @@ async function runScan({ trigger = 'manual', concurrency = 6, limit = null } = {
     state.partial = partial;
     return {
       scanDate: state.scanDate, scanned: state.total, scored: state.scored,
-      failed: state.failed, top: partial ? 0 : ranked.length, partial,
-      note: partial ? 'Partial scan — scores were saved but the daily Top 25 was left alone.' : null,
+      failed: state.failed, partial, universes: perUniverse,
+      constituents: constituents.universes,
+      constituentFailures: constituents.failures,
+      note: partial ? 'Partial scan — scores were saved but the daily rankings were left alone.' : null,
       failures: failures.slice(0, 20),
     };
   } catch (e) {
@@ -192,13 +300,16 @@ async function runScan({ trigger = 'manual', concurrency = 6, limit = null } = {
   }
 }
 
-/** The most recent Top 25. Reports its own date so a stale list cannot pass as today's. */
-async function topPicks() {
-  const scanDate = await market.latestScanDate(UNIVERSE);
+/** The most recent Top 25 for one index. Reports its own date so a stale list cannot pass as today's. */
+async function topPicks(universeKey = UNIVERSE) {
+  const key = UNIVERSES[universeKey] ? universeKey : UNIVERSE;
+  const scanDate = await market.latestScanDate(key);
   if (!scanDate) {
-    return { scanDate: null, picks: [], stale: false, message: 'No scan has run yet.' };
+    return { scanDate: null, picks: [], stale: false, universe: key,
+      universeLabel: UNIVERSES[key].label, universes: universeList(),
+      message: `No scan has run yet for ${UNIVERSES[key].label}.` };
   }
-  const rows = await market.topForDate(UNIVERSE, scanDate);
+  const rows = await market.topForDate(key, scanDate);
   const today = istDate();
   const ageDays = Math.round((new Date(today) - new Date(scanDate)) / 864e5);
 
@@ -209,7 +320,9 @@ async function topPicks() {
     scanDate,
     ageDays,
     stale: ageDays > 3,
-    universe: UNIVERSE,
+    universe: key,
+    universeLabel: UNIVERSES[key].label,
+    universes: universeList(),
     picks: rows.map((r) => {
       const d = safeJson(r.detail_json);
       const q = quotes.get(r.symbol);
@@ -241,11 +354,17 @@ function safeJson(s) {
   try { return JSON.parse(s || '{}'); } catch { return {}; }
 }
 
-async function history(limit = 30) {
-  return market.scanDates(UNIVERSE, limit);
+async function history(limit = 30, universeKey = UNIVERSE) {
+  return market.scanDates(UNIVERSES[universeKey] ? universeKey : UNIVERSE, limit);
+}
+
+/** The four rankings, for a page that has to offer a choice between them. */
+function universeList() {
+  return UNIVERSE_KEYS.map((k) => ({ key: k, label: UNIVERSES[k].label }));
 }
 
 module.exports = {
-  UNIVERSE, TOP_N, QUALIFYING,
-  refreshConstituents, runScan, status, topPicks, history, parseCsv, splitCsvLine,
+  UNIVERSE, UNIVERSES, UNIVERSE_KEYS, TOP_N, QUALIFYING, universeList,
+  refreshConstituents, fetchConstituents, runScan, status, topPicks, history,
+  parseCsv, splitCsvLine,
 };

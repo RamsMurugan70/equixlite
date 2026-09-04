@@ -15,6 +15,7 @@ more duplication, far less risk to the thing that already works.
 |---|---|
 | Users | A handful, known personally. No self-signup — the admin issues credentials. An admin account manages people only; it holds no portfolio. |
 | Portfolios | Three per user, at most one per broker. |
+| Rankings | Nifty 500, Midcap 150, Smallcap 250, Microcap 250 — scored in one pass over their union. |
 | Broker connect | Each user supplies their own API keys. ICICI Direct and Zerodha connect; Kotak Neo stores keys but has no session flow yet. CSV import is the fallback. |
 | Database | SQLite, its own file at `data/equixlite.db`. Fresh — no desktop data is copied. |
 | Hosting | One small box. |
@@ -36,7 +37,7 @@ server/
       ops/        nightly scheduler, database backups
       portfolio/  FIFO, holdings, health, performance, decision review
       scoring/    the 0-100 health score
-      universe/   the NIFTY 500 scan and the Top 25
+      universe/   the daily scan of four indices, and the Top 25 of each
     controllers/  request handling
     routes/       endpoint definitions
     scripts/      admin creation, demo reset, and the test suite
@@ -60,7 +61,7 @@ true, or a non-https `PUBLIC_URL` each stop it with a message naming the variabl
 
 ## What runs on its own
 
-At 18:00 IST on weekdays: rescan the NIFTY 500, freeze the day's Top 25, sweep expired sessions,
+At 18:00 IST on weekdays: rescan the four indices, freeze the day's Top 25, sweep expired sessions,
 purge the market cache, take a backup (14 kept). The timer lives inside the app process, so it
 shares the scan lock and two scans cannot race. `GET /api/admin/ops` reports what it did.
 

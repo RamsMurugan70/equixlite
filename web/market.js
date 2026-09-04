@@ -454,12 +454,20 @@ async function renderPickerMatches() {
 }
 
 // ── top 25 ───────────────────────────────────────────────────────────────────
+let picksUniverse = 'NIFTY500';
+
 async function renderPicks(body) {
-  const d = await api('/api/recommendations/top');
+  const d = await api(`/api/recommendations/top?universe=${picksUniverse}`);
   const nodes = [];
 
-  // An admin gets the scan button; everyone else just sees when it last ran.
+  // Which of the four rankings. Offered to everyone; the scan button beside it is admin-only.
   const tools = [];
+  if (d.universes?.length > 1) {
+    const usel = el('select', { className: 'sm' }, d.universes.map((u) =>
+      el('option', { value: u.key, textContent: u.label, selected: u.key === d.universe })));
+    usel.onchange = () => { picksUniverse = usel.value; openTab('picks'); };
+    tools.push(usel);
+  }
   if (me?.role === 'admin') {
     const btn = el('button', { className: 'ghost sm',
       textContent: d.scanStatus?.running ? 'Scanning…' : 'Run scan' });
@@ -492,8 +500,9 @@ async function renderPicks(body) {
   }
 
   nodes.push(el('p', { className: 'muted' },
-    `Ranked from this app's own scoring of the NIFTY 500 — no imported tip lists. `
-    + `Only stocks whose trend still qualifies are eligible, which is why fewer than 25 can appear.`));
+    `Ranked from this app's own scoring of the ${d.universeLabel || 'Nifty 500'} — no imported `
+    + `tip lists. Only stocks whose trend still qualifies are eligible, which is why fewer than `
+    + `25 can appear.`));
 
   if (d.stale) {
     nodes.push(el('div', { className: 'msg warn' },
