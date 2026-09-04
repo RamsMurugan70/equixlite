@@ -15,6 +15,7 @@
 const repo = require('../../repositories/portfolioRepository');
 const credentials = require('../../repositories/credentialRepository');
 const userRepo = require('../../repositories/userRepository');
+const snapshotQuality = require('../portfolio/snapshotQualityService');
 const { withUserDatabase } = require('../../db/tenantGuard');
 const breeze = require('../broker/breezeClient');
 const kite = require('../broker/kiteClient');
@@ -45,6 +46,11 @@ async function syncHoldings(userId, portfolio, broker) {
     const holdings = await client.fetchHoldings(userId);
     const snapshotDate = todayIst();
     const saved = await repo.saveSnapshot(userId, portfolio.id, { snapshotDate, holdings, source: broker });
+    // Judged the moment it lands, against its own neighbours. A truncated fetch is only
+    // detectable relative to the days either side of it, so this cannot be decided inside the
+    // capture itself. Never fatal: a capture that stored fine is not undone by failing to grade it.
+    await snapshotQuality.assessUser(userId, { portfolioId: portfolio.id })
+      .catch((e) => console.warn(`⚠ could not assess capture quality: ${e.message}`));
     const detail = `${saved.holdings} holding(s) stored for ${snapshotDate}`;
     await recordRun(userId, { portfolioId: portfolio.id, kind: 'holdings', source: broker,
       rowsSeen: holdings.length, rowsInserted: saved.holdings, status: 'ok', detail });
@@ -188,7 +194,11 @@ async function getStatus(userId, { sinceDays = 30 } = {}) {
     nextAutoSyncAt = sched.status().brokerSync?.nextRunAt || null;
   } catch { /* scheduler not running — the button is the only path */ }
 
-  return { today, connections, todayRuns, gaps: gaps.slice(0, 40), nextAutoSyncAt };
+  // Captures that landed but should not be trusted. Distinct from a gap: a gap is a day with
+  // no data, this is a day with data that is wrong, and the second is the one that misleads.
+  const quality = await snapshotQuality.listProblems(userId, { limit: 20 }).catch(() => []);
+
+  return { today, connections, todayRuns, gaps: gaps.slice(0, 40), nextAutoSyncAt, quality };
 }
 
 // ── Scheduled sweep, across every account ────────────────────────────────────

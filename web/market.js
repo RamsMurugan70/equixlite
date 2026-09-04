@@ -565,6 +565,25 @@ async function renderDailySync(body) {
       + 'Each attempt skips whatever already captured today, so a late login still gets the day in.'
     : 'Automatic capture is off on this server — nothing is recorded unless you press Sync now.'));
 
+  // Captures that landed but should not be trusted. A different problem from a gap, and the
+  // more misleading one: a gap shows as a missing day, this shows as a real day with a cliff in it.
+  if (d.quality?.length) {
+    const q = el('div', { className: 'panel-inset' },
+      el('div', { className: 'brow' },
+        el('h3', {}, 'Captures not to be trusted'),
+        el('span', { className: 'muted' }, 'left out of the value chart')),
+      table(['Date', 'Portfolio', 'Status', 'Holdings', 'Why'],
+        d.quality.map((x) => [
+          x.snapshot_date,
+          x.portfolio_name || `#${x.portfolio_id}`,
+          el('span', { className: `tag ${x.status === 'DAMAGED' ? 'off' : 'pend'}` },
+            x.status.toLowerCase()),
+          x.holdings === null ? '—' : String(x.holdings),
+          x.reason || '—',
+        ])));
+    nodes.push(q);
+  }
+
   const todayBox = el('div', { className: 'panel-inset' }, el('h3', {}, `Today (${d.today})`));
   if (!d.todayRuns.length) {
     todayBox.append(el('p', { className: 'muted' }, 'Nothing synced yet today.'));

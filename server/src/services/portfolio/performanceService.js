@@ -15,6 +15,7 @@ const repo = require('../../repositories/portfolioRepository');
 const holdings = require('./holdingsService');
 const fifo = require('./fifoService');
 const yahoo = require('../market/yahoo');
+const snapshotQuality = require('./snapshotQualityService');
 
 const WINDOWS = { '1M': 30, '3M': 91, '6M': 182, '1Y': 365, ALL: null };
 
@@ -32,7 +33,19 @@ async function valueHistory(userId, { portfolioId = null, window = '6M' } = {}) 
   const from = days ? istDate(days) : null;
   const rows = await repo.valueSeries(userId, { portfolioId, from });
 
-  const series = rows.map((r) => ({
+  // A truncated capture draws a cliff and a recovery that the portfolio never had. Dropping the
+  // day leaves a gap in the line, which is honest — the alternative is a shape that invites a
+  // conclusion about a crash that did not happen.
+  //
+  // null means nothing has been assessed, which is NOT the same as everything being clean: the
+  // series is shown untouched rather than filtered against an empty verdict set.
+  const excluded = await snapshotQuality.excludedDates(userId).catch(() => null);
+  const kept = excluded
+    ? rows.filter((r) => ![...excluded].some((k) => k.endsWith(`|${r.summary_date}`)))
+    : rows;
+  const dropped = rows.length - kept.length;
+
+  const series = kept.map((r) => ({
     date: r.summary_date,
     invested: round2(r.invested),
     value: round2(r.value),
@@ -52,6 +65,9 @@ async function valueHistory(userId, { portfolioId = null, window = '6M' } = {}) 
     // Three points over six months is not a six-month chart. The threshold is deliberately low
     // — this is guarding against "two points drawn as a trend", not demanding daily coverage.
     usable: series.length >= 4 && spanDays >= 14,
+    // Named rather than silent. A line with a gap in it prompts "is this broken?", and the
+    // honest answer is that a day was left out on purpose and here is how many.
+    excludedDays: dropped,
     coverage: {
       from: first?.date || null,
       to: last?.date || null,
