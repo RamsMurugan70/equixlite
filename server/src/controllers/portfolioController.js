@@ -3,6 +3,7 @@
 const repo = require('../repositories/portfolioRepository');
 const holdings = require('../services/portfolio/holdingsService');
 const fifo = require('../services/portfolio/fifoService');
+const corporateActions = require('../services/market/corporateActionsService');
 const { withUserDatabase } = require('../db/tenantGuard');
 
 // A validation failure is the caller's problem (400); anything else is ours (500). Without this
@@ -99,13 +100,26 @@ async function taxLots(req, res, next) {
   try {
     const portfolioId = req.query.portfolioId ? Number(req.query.portfolioId) : null;
     const orders = await repo.listOrders(req.user.id, { portfolioId, limit: 100000 });
-    const summary = fifo.taxSummary(orders, { financialYear: req.query.financialYear || null });
+    const actions = await corporateActions
+      .quantityActionsFor(orders.map((o) => o.symbol))
+      .catch(() => null);
+    const summary = fifo.taxSummary(orders, {
+      financialYear: req.query.financialYear || null,
+      actionsBySymbol: actions,
+    });
+    // How many symbols were actually adjusted, so the caveat can be specific rather than a
+    // blanket disclaimer that gets ignored because it is always there.
+    const adjusted = actions ? [...actions.keys()].filter((s) => actions.get(s)?.length).length : 0;
     res.json({
       ...summary,
       // Stated plainly rather than buried: FIFO over an incomplete order history produces
       // confident numbers that are wrong, and one bonus issue is enough to cause it.
-      caveat: 'FIFO over your recorded orders. Corporate actions are not applied, so a symbol '
-        + "with a bonus or split may not match your broker's statement.",
+      caveat: 'FIFO over your recorded orders. '
+        + (adjusted
+          ? `Splits and bonuses are applied for ${adjusted} symbol(s) from NSE records. `
+            + 'Anything NSE has not published is still unadjusted.'
+          : 'No corporate actions are on record yet, so a symbol with a bonus or split may not '
+            + "match your broker's statement."),
     });
   } catch (e) { next(e); }
 }

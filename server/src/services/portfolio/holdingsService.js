@@ -20,6 +20,7 @@
 const repo = require('../../repositories/portfolioRepository');
 const fifo = require('./fifoService');
 const yahoo = require('../market/yahoo');
+const corporateActions = require('../market/corporateActionsService');
 const { withUserDatabase } = require('../../db/tenantGuard');
 
 async function costBasisOverrides(userId, portfolioId) {
@@ -36,7 +37,14 @@ async function getHoldings(userId, portfolioId, { live = true } = {}) {
     costBasisOverrides(userId, portfolioId),
   ]);
 
-  const matched = fifo.matchAll(orders);
+  // Splits and bonuses change quantity without a BUY order. Without them a post-bonus sale looks
+  // like a sale of shares that were never bought, and the position reads half what the broker
+  // says. Failing to load them narrows the answer rather than breaking the page.
+  const actions = await corporateActions
+    .quantityActionsFor(orders.map((o) => o.symbol))
+    .catch(() => null);
+
+  const matched = fifo.matchAll(orders, actions);
   const source = snapshot?.holdings?.length ? 'broker-snapshot' : 'orders';
 
   // Start from whichever source owns quantity.

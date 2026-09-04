@@ -33,16 +33,61 @@ const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / MS_PER_DA
  * Walks one symbol's orders oldest-first.
  * Returns open lots (what is still held) and closed lots (what was sold, with its gain).
  */
-function matchSymbol(orders) {
+/**
+ * Applies one corporate action to the lots open at its ex-date.
+ *
+ * COST IS CONSERVED, quantity is not. A 1:1 bonus doubles the shares and halves what each one
+ * cost; the money that went in has not changed, so neither has the total cost or any realised
+ * gain computed from it. That is also the property that makes this safe to apply mid-walk: a
+ * lot's contribution to a later sale's cost is identical before and after.
+ *
+ * ONLY LOTS ALREADY OPEN are touched, which is automatic here — the walk is chronological, so
+ * everything in `open` when this runs was bought before the ex-date. Shares bought after it are
+ * already quoted post-action by the exchange and must not be adjusted again.
+ */
+function applyAction(open, factor) {
+  if (!(factor > 0) || factor === 1) return;
+  for (const lot of open) {
+    lot.qty *= factor;
+    lot.price /= factor;
+  }
+}
+
+/**
+ * @param orders  rows for ONE symbol
+ * @param actions quantity-changing corporate actions for that symbol, oldest first, as
+ *                { exDate, factor } — splits and bonuses. Omit and the walk behaves exactly as
+ *                it did before, which is what every caller that has no such data still does.
+ */
+function matchSymbol(orders, actions = []) {
   const sorted = [...orders].sort((a, b) => (keyOf(a) < keyOf(b) ? -1 : 1));
   const open = [];      // { date, qty, price, charges }
   const closed = [];
   let unmatchedQty = 0; // sold with no purchase on record
 
+  // Pending actions, oldest first. Each is applied when the walk first reaches a trade on or
+  // after its ex-date, and any left over are applied at the end — a bonus that happened after
+  // the last trade still changes what is held today.
+  const pending = [...actions]
+    .filter((a) => a && a.exDate && Number(a.factor) > 0 && Number(a.factor) !== 1)
+    .sort((a, b) => (a.exDate < b.exDate ? -1 : 1));
+  const applied = [];
+  const drainUpTo = (date) => {
+    while (pending.length && (!date || pending[0].exDate <= date)) {
+      const a = pending.shift();
+      applyAction(open, Number(a.factor));
+      applied.push(a);
+    }
+  };
+
   for (const o of sorted) {
     const qty = Math.abs(Number(o.quantity) || 0);
     const price = Number(o.price) || 0;
     if (!qty) continue;
+
+    // Before the trade is processed, not after: a sale on the ex-date is a sale of the adjusted
+    // quantity, and adjusting afterwards would match it against pre-split lots.
+    drainUpTo(o.trade_date);
 
     if (String(o.side).toUpperCase() === 'BUY') {
       open.push({ date: o.trade_date, qty, price, charges: Number(o.charges) || 0 });
@@ -76,6 +121,9 @@ function matchSymbol(orders) {
     if (remaining > 0) unmatchedQty += remaining;
   }
 
+  // Anything with an ex-date after the last trade still changes what is held now.
+  drainUpTo(null);
+
   const heldQty = open.reduce((t, l) => t + l.qty, 0);
   const heldCost = open.reduce((t, l) => t + l.qty * l.price, 0);
 
@@ -88,11 +136,20 @@ function matchSymbol(orders) {
     // wrong the moment anything has been sold.
     avgCost: heldQty > 0 ? heldCost / heldQty : 0,
     unmatchedQty,
+    // What was applied, so a caller can explain a quantity that does not match the order history
+    // instead of leaving it looking like a data error.
+    actionsApplied: applied,
   };
 }
 
-/** Groups orders by symbol and runs the match over each. */
-function matchAll(orders) {
+/**
+ * Groups orders by symbol and runs the match over each.
+ *
+ * @param actionsBySymbol optional Map of SYMBOL -> [{ exDate, factor }], as
+ *        corporateActionsService.quantityActionsFor returns. Absent, every symbol matches
+ *        unadjusted, which is what it did before corporate actions existed.
+ */
+function matchAll(orders, actionsBySymbol = null) {
   const bySymbol = new Map();
   for (const o of orders) {
     const s = String(o.symbol || '').toUpperCase();
@@ -101,21 +158,23 @@ function matchAll(orders) {
     bySymbol.get(s).push(o);
   }
   const out = new Map();
-  for (const [symbol, rows] of bySymbol) out.set(symbol, matchSymbol(rows));
+  for (const [symbol, rows] of bySymbol) {
+    out.set(symbol, matchSymbol(rows, actionsBySymbol?.get(symbol) || []));
+  }
   return out;
 }
 
 /** Realised gains across every symbol, newest sale first. */
-function realisedGains(orders) {
+function realisedGains(orders, actionsBySymbol = null) {
   const all = [];
-  for (const [, m] of matchAll(orders)) all.push(...m.closedLots);
+  for (const [, m] of matchAll(orders, actionsBySymbol)) all.push(...m.closedLots);
   all.sort((a, b) => (a.sellDate < b.sellDate ? 1 : -1));
   return all;
 }
 
 /** Totals by tax term, optionally limited to one financial year. */
-function taxSummary(orders, { financialYear = null } = {}) {
-  let lots = realisedGains(orders);
+function taxSummary(orders, { financialYear = null, actionsBySymbol = null } = {}) {
+  let lots = realisedGains(orders, actionsBySymbol);
   if (financialYear) {
     // Indian FY runs 1 April to 31 March, named by its starting year: "2026" is 2026-04-01 to
     // 2027-03-31.

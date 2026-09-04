@@ -12,6 +12,7 @@
 // which is the one thing that makes a fixed +05:30 offset safe here.
 const universe = require('../universe/universeService');
 const dailySync = require('../imports/dailySyncService');
+const corporateActions = require('../market/corporateActionsService');
 const market = require('../../repositories/marketRepository');
 const { withDatabase, runAsync } = require('../../db/connection');
 const { backupDatabase } = require('./backup');
@@ -124,6 +125,10 @@ async function housekeeping() {
   };
   await step('sessionsSwept', sweepSessions);
   await step('cachePurged', () => market.cachePurge(7).then((r) => r?.changes ?? 0));
+  // A window either side of today: back far enough to catch an action published late, forward
+  // far enough for the dashboard's three-week "upcoming" card to have something to show.
+  await step('corporateActions', () => corporateActions.refresh({ backDays: 30, aheadDays: 45 })
+    .then((r) => r.saved ?? 0));
   await step('backup', () => backupDatabase().then((b) => b.file));
   return out;
 }
