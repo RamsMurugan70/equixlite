@@ -87,6 +87,14 @@
     padding:7px 14px; min-height:auto; font-size:.9rem; }
   .tab.on { background:var(--subtle); color:var(--text); border-color:var(--border-strong); }
 
+  /* The second row. Deliberately quieter than the group tabs above it — same information
+     hierarchy as the heading it sits under, so the eye reads group first, then part. */
+  #subtabs { display:flex; gap:3px; flex-wrap:wrap; background:var(--subtle); border-radius:9px;
+    padding:4px; width:fit-content; max-width:100%; }
+  .subtab { background:transparent; color:var(--text-2); border:none; min-height:auto;
+    padding:5px 12px; font-size:.85rem; border-radius:7px; font-weight:600; }
+  .subtab.on { background:var(--surface); color:var(--text); box-shadow:0 1px 2px #1b1d2814; }
+
   .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; }
   .stat { background:var(--subtle); border-radius:8px; padding:12px 14px; }
   .stat .k { font-size:.7rem; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); font-weight:700; }
@@ -338,6 +346,7 @@
         <span id="view-tools" class="toolbar" hidden></span>
       </div>
       <div id="tabs"></div>
+      <div id="subtabs" hidden></div>
       <div id="tab-body"></div>
     </div>
   </main>

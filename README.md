@@ -41,7 +41,9 @@ server/
     routes/       endpoint definitions
     scripts/      admin creation, demo reset, and the test suite
 data/             equixlite.db and data/backups/ (gitignored)
-web/              the whole UI - plain HTML/JS, no build step
+web/              the whole UI - plain HTML/JS, no build step. Seven groups
+                  (Dashboard, Action Queue, Portfolio, Performance, Ideas,
+                  Research, Data), each with its own sub-views
 Dockerfile        multi-stage, non-root
 docker-compose.yml  app + Caddy (TLS)
 DEPLOY.md         the deployment guide

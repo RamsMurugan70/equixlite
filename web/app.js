@@ -196,45 +196,118 @@ $('#f-setup').addEventListener('submit', async (e) => {
 // Dashboard first, because it is the answer to "how am I doing" and everything else is a
 // follow-up question. "Add trades" folded into Orders — it is how orders get there, not a
 // separate place to be.
-const TABS = [
-  ['dashboard', 'Dashboard'],
-  ['actionqueue', 'Action Queue'],
-  ['holdings', 'Holdings'],
-  ['dailysync', 'Daily Sync'],
-  ['health', 'Health'],
-  ['picks', 'Recommendations'],
-  ['untracked', 'Untracked Holdings'],
-  ['ideas', 'Ideas'],
-  ['performance', 'Performance'],
-  ['sleuth', 'Stock Sleuth'],
-  ['orders', 'Orders'],
-  ['tax', 'Tax'],
-  ['brokers', 'Brokers'],
-  ['askdata', 'Ask the Data'],
+// ── navigation ───────────────────────────────────────────────────────────────
+// Seven groups rather than fourteen tabs. The views did not change; what changed is that
+// related ones now sit together instead of competing for space in a bar that wrapped onto two
+// rows and made everything look equally important.
+//
+// The grouping is by the question being asked, not by which service serves it:
+//   what do I own · how am I doing · where do ideas come from · what should I do now ·
+//   what is this stock · and the plumbing.
+//
+// A group with one view shows no second row — a segmented control offering a single choice is
+// furniture, not navigation.
+const GROUPS = [
+  { key: 'dashboard', label: 'Dashboard', views: [['dashboard', 'Dashboard']] },
+  { key: 'action', label: 'Action Queue', views: [['actionqueue', 'Action Queue']] },
+  {
+    key: 'portfolio',
+    label: 'Portfolio',
+    views: [['holdings', 'Holdings'], ['health', 'Health'], ['tax', 'Tax']],
+  },
+  {
+    key: 'performance',
+    label: 'Performance',
+    views: [['performance', 'Overview'], ['decisions', 'Decision review']],
+  },
+  {
+    key: 'ideas',
+    label: 'Ideas',
+    // Top 25 is the app's own list; My ideas are yours and the published ones; the last two are
+    // the same question from either end — which holdings an idea or the list accounts for, and
+    // which nothing does.
+    views: [['picks', 'Top 25'], ['ideas', 'My ideas'],
+      ['attribution', 'Why you own it'], ['untracked', 'Unattributed']],
+  },
+  {
+    key: 'research',
+    label: 'Research',
+    views: [['sleuth', 'Stock Sleuth'], ['askdata', 'Ask the Data']],
+  },
+  {
+    key: 'data',
+    label: 'Data',
+    views: [['orders', 'Orders'], ['dailysync', 'Daily Sync'], ['brokers', 'Brokers']],
+  },
 ];
-// Tabs that are about the market rather than one portfolio. The portfolio picker is hidden on
-// these, because offering a choice that changes nothing is worse than offering none.
-const GLOBAL_TABS = new Set(['picks', 'untracked', 'ideas', 'sleuth', 'brokers', 'dashboard', 'actionqueue', 'dailysync', 'askdata']);
+
+const VIEW_GROUP = new Map();
+for (const g of GROUPS) for (const [v] of g.views) VIEW_GROUP.set(v, g.key);
+
+// Views about the market rather than one portfolio. The portfolio picker is hidden on these,
+// because offering a choice that changes nothing is worse than offering none.
+const GLOBAL_TABS = new Set(['picks', 'untracked', 'ideas', 'attribution', 'sleuth', 'brokers',
+  'dashboard', 'actionqueue', 'dailysync', 'askdata']);
+
 let activeTab = 'dashboard';
+// Where you were in each group, so coming back lands where you left rather than resetting.
+const lastViewInGroup = new Map();
 
 function renderTabs() {
   const sel = $('#pf-select');
   sel.replaceChildren(...portfolios.map((p) => el('option', { value: p.id, textContent: p.name, selected: p.id === current })));
   sel.onchange = async () => { current = Number(sel.value); await openTab(activeTab); };
 
-  const global = GLOBAL_TABS.has(activeTab);
-  $('#pf-picker').hidden = global;
-  $('#panel-title').textContent = (TABS.find(([k]) => k === activeTab) || [, 'Portfolio'])[1];
+  const groupKey = VIEW_GROUP.get(activeTab) || 'dashboard';
+  const group = GROUPS.find((g) => g.key === groupKey);
+  const view = group?.views.find(([k]) => k === activeTab);
 
-  $('#tabs').replaceChildren(...TABS.map(([key, label]) => {
-    const b = el('button', { type: 'button', textContent: label, className: key === activeTab ? 'tab on' : 'tab' });
-    b.onclick = () => openTab(key);
+  $('#pf-picker').hidden = GLOBAL_TABS.has(activeTab);
+  // The group names the page; the sub-view names the part of it, and repeating both in the
+  // heading when they are the same word reads as a stutter.
+  $('#panel-title').textContent = group && view && group.label !== view[1]
+    ? `${group.label} · ${view[1]}` : (view ? view[1] : 'Portfolio');
+
+  $('#tabs').replaceChildren(...GROUPS.map((g) => {
+    const b = el('button', {
+      type: 'button',
+      textContent: g.label,
+      className: g.key === groupKey ? 'tab on' : 'tab',
+    });
+    b.onclick = () => openGroup(g.key);
     return b;
   }));
+
+  const subs = $('#subtabs');
+  if (!group || group.views.length < 2) {
+    subs.replaceChildren();
+    subs.hidden = true;
+  } else {
+    subs.hidden = false;
+    subs.replaceChildren(...group.views.map(([key, label]) => {
+      const b = el('button', {
+        type: 'button',
+        textContent: label,
+        className: key === activeTab ? 'subtab on' : 'subtab',
+      });
+      b.onclick = () => openTab(key);
+      return b;
+    }));
+  }
+}
+
+/** Opens a group at whichever of its views you were last on. */
+function openGroup(groupKey) {
+  const g = GROUPS.find((x) => x.key === groupKey);
+  if (!g) return;
+  const remembered = lastViewInGroup.get(groupKey);
+  const known = g.views.some(([k]) => k === remembered);
+  return openTab(known ? remembered : g.views[0][0]);
 }
 
 async function openTab(key) {
   activeTab = key;
+  lastViewInGroup.set(VIEW_GROUP.get(key) || 'dashboard', key);
   // A poll started by the Top 25 view must not keep running once that view is gone.
   if (key !== 'picks' && typeof scanPoll !== 'undefined' && scanPoll) {
     clearInterval(scanPoll); scanPoll = null;
@@ -250,10 +323,12 @@ async function openTab(key) {
     if (key === 'dailysync') await renderDailySync(body);
     if (key === 'untracked') await renderUntracked(body);
     if (key === 'ideas') await renderIdeas(body);
+    if (key === 'attribution') await renderAttribution(body);
     if (key === 'askdata') await renderAskData(body);
     if (key === 'health') await renderHealth(body);
     if (key === 'picks') await renderPicks(body);
     if (key === 'performance') await renderPerformance(body);
+    if (key === 'decisions') await renderDecisions(body);
     if (key === 'sleuth') await renderSleuth(body);
     if (key === 'orders') await renderOrders(body);
     if (key === 'tax') await renderTax(body);

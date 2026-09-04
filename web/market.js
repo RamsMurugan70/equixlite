@@ -455,9 +455,8 @@ async function renderPickerMatches() {
 
 // ── top 25 ───────────────────────────────────────────────────────────────────
 async function renderPicks(body) {
-  const [d, pmBox] = await Promise.all([api('/api/recommendations/top'), renderPickerMatches()]);
+  const d = await api('/api/recommendations/top');
   const nodes = [];
-  if (pmBox) nodes.push(pmBox);
 
   // An admin gets the scan button; everyone else just sees when it last ran.
   const tools = [];
@@ -659,10 +658,6 @@ async function renderPerformance(body) {
     nodes.push(el('div', { className: 'msg warn' },
       `${p.unpricedCount} holding(s) could not be priced, so the unrealised figure excludes them.`));
   }
-
-  // How the portfolio did, then how the individual calls did. Same page, because "am I ahead"
-  // and "am I any good at this" are the same question asked at two different resolutions.
-  nodes.push(await renderDecisionReview());
 
   nodes.push(table(
     ['Symbol', 'Qty', 'Invested', 'Value', 'Unrealised', 'Realised', 'Total', ''],
@@ -1213,4 +1208,21 @@ async function renderDecisionReview(host) {
       `${s.unmeasurable} trade(s) predate the price history on hand, so they are listed without a verdict.`));
   }
   return box;
+}
+
+// ── views that are just a wrapper round one panel ────────────────────────────
+// Both of these were sections inside a longer page. They are their own view now, reachable from
+// the group they belong to rather than found by scrolling something else.
+
+/** Ideas → Why you own it. */
+async function renderAttribution(body) {
+  const box = await renderPickerMatches();
+  body.replaceChildren(box || el('p', { className: 'muted' },
+    'Nothing held yet, so there is nothing to attribute. Add trades on the Data tab, or connect '
+    + 'a broker.'));
+}
+
+/** Performance → Decision review. */
+async function renderDecisions(body) {
+  body.replaceChildren(await renderDecisionReview());
 }
