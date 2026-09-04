@@ -387,10 +387,15 @@ function connectionCard(c) {
     card.append(el('div', { className: 'row' },
       ...connectControls(c, out, () => openTab('dailysync'))));
   } else {
-    // No key means no login will help — say so and point at where it is fixed.
+    // No key means no login link can even be built — Kite and Breeze both put the api_key in the
+    // login URL. So this says why there is no button, and goes to where it is fixed rather than
+    // naming a tab and leaving the user to find it.
     card.append(el('p', { className: 'muted small' },
-      `No API key saved for ${c.label} yet. Add it under Data → Brokers, then come back here to `
-      + 'log in.'));
+      `No API key saved for ${c.label} yet. The login link is built from that key, so it cannot `
+      + 'be offered until the key is in.'));
+    const go = el('button', { className: 'ghost sm', textContent: `Add ${c.label} keys` });
+    go.onclick = () => openTab('brokers');
+    card.append(el('div', { className: 'row' }, go));
   }
 
   card.append(out);

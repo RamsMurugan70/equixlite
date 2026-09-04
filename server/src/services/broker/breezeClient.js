@@ -136,6 +136,21 @@ async function call(userId, { method = 'GET', path, body = {} }) {
  * Verified by making a real call — a token that parses but does not work is worse than a
  * rejection, because it fails later, somewhere else, looking like a different problem.
  */
+/**
+ * Exchange the token pasted from the login page for the one every other call needs.
+ *
+ * THESE ARE TWO DIFFERENT TOKENS, and conflating them is why every request afterwards failed.
+ * The login page shows an API_Session value. `/customerdetails` takes that and returns a
+ * `session_token`, and it is THAT which goes in X-SessionToken from then on. Storing the pasted
+ * value instead leaves a connection that looks established — customerdetails accepted it, so
+ * the connect call succeeds — while holdings and trades come back "Index was outside the bounds
+ * of the array", a Breeze internal error that reads like a fault at this end rather than a
+ * rejected credential.
+ *
+ * The bootstrap call is also the one request that carries PLAIN headers: no checksum, because
+ * there is no session to sign with yet. Sending signed headers here is what makes this call
+ * itself fail on some accounts.
+ */
 async function connect(userId, apiSessionToken) {
   const token = String(apiSessionToken || '').trim();
   if (!token) throw Object.assign(new Error('Paste the API session token from the login page.'), { code: 'MISSING_FIELDS' });
@@ -145,16 +160,37 @@ async function connect(userId, apiSessionToken) {
     throw Object.assign(new Error('Add your ICICI API key and secret before connecting.'), { code: 'NOT_CONFIGURED' });
   }
 
-  const expiresAt = sessionExpiry();
-  await credentials.saveSession(userId, BROKER, token, expiresAt);
-  try {
-    const me = await call(userId, { method: 'GET', path: '/customerdetails', body: { SessionToken: token, AppKey: creds.apiKey } });
-    return { connected: true, expiresAt, userId: me?.idirect_userid || me?.idirect_user_name || null };
-  } catch (e) {
-    // Do not leave a token that does not work sitting in the database looking connected.
-    await credentials.clearSession(userId, BROKER);
-    throw e;
+  const { status, text } = await request({
+    method: 'GET',
+    path: `${BASE_PATH}/customerdetails`,
+    headers: { 'Content-Type': 'application/json' },
+    body: { SessionToken: token, AppKey: creds.apiKey },
+  });
+
+  let data;
+  try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 300) }; }
+  const payload = data?.Success ?? data;
+  const ok = status >= 200 && status < 300 && String(data?.Status ?? 200) === '200';
+  if (!ok) {
+    const detail = data?.Error || data?.error || `HTTP ${status}`;
+    throw Object.assign(new Error(`ICICI Direct rejected the login: ${detail}`), { code: 'BROKER_ERROR' });
   }
+
+  const sessionKey = payload?.session_token || payload?.session_key || null;
+  if (!sessionKey) {
+    // Better to refuse than to store the pasted token and let every later call fail obscurely.
+    throw Object.assign(
+      new Error('ICICI Direct accepted the login but returned no session token. Try generating a fresh one.'),
+      { code: 'BROKER_ERROR' });
+  }
+
+  const expiresAt = sessionExpiry();
+  await credentials.saveSession(userId, BROKER, sessionKey, expiresAt);
+  return {
+    connected: true,
+    expiresAt,
+    userId: payload?.idirect_userid || payload?.idirect_user_name || payload?.user_id || null,
+  };
 }
 
 /**
