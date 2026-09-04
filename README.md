@@ -95,6 +95,7 @@ Other scripts:
 
 ```
 npm run reset-demo                                  remove every non-admin account
+npm run import-equix -- --db "<path to app.db">     bring the desktop app's Top-25 history across
 DB_PATH=data/isolation-test.db npm run test:isolation   prove users cannot see each other
 ```
 
