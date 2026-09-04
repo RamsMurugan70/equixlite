@@ -430,6 +430,30 @@ async function renderTax(body) {
 const gainText = (g) => el('span', { className: g >= 0 ? 'pos' : 'neg' }, `${g >= 0 ? '+' : ''}${inr(g)}`);
 
 
+/**
+ * Watches for a broker connecting itself in another tab.
+ *
+ * Bounded on purpose: it stops on success, after two minutes, or as soon as the controls it was
+ * started for leave the page. An unbounded poll outliving its view is a background request that
+ * nobody asked for and nothing turns off.
+ */
+function watchForConnection(broker, out, onDone) {
+  const started = Date.now();
+  const tick = async () => {
+    if (!out.isConnected || Date.now() - started > 120000) return;
+    try {
+      const d = await api('/api/brokers/status');
+      if (d.brokers.find((x) => x.broker === broker)?.connected) {
+        msg(out, 'Connected at the broker. Refreshing…', 'ok');
+        if (onDone) onDone();
+        return;
+      }
+    } catch { /* a failed poll is not worth reporting; the next one may work */ }
+    setTimeout(tick, 3000);
+  };
+  setTimeout(tick, 3000);
+}
+
 // The daily login, as three controls: open the broker's page, paste what it gives back, connect.
 //
 // EXTRACTED BECAUSE TWO SCREENS NEED IT. Brokers is where keys are managed; Daily Sync is where
@@ -447,10 +471,14 @@ function connectControls(b, out, onDone) {
       const r = await api('/api/brokers/' + b.broker + '/login-url');
       window.open(r.loginUrl, '_blank', 'noopener');
       msg(out, b.broker === 'zerodha'
-        ? 'If your redirect URL points here, that tab will connect on its own — reload this page '
-          + 'when it does. Otherwise copy request_token from its address bar and paste it below.'
+        ? 'Logging in at Zerodha. If your redirect URL points here, this page will notice on its '
+          + 'own — otherwise copy request_token from that tab and paste it below.'
         : 'After logging in, copy the API session token from that page and paste it below.',
       'warn');
+      // Zerodha can complete the connection by itself, in the tab it just opened, via the
+      // callback route. Without this the page goes on saying "not connected" until something
+      // makes the user reload — which looks exactly like the login having failed.
+      if (b.broker === 'zerodha') watchForConnection(b.broker, out, onDone);
     } catch (e) { msg(out, e.message, 'err'); }
   };
 

@@ -176,48 +176,122 @@ async function connect(userId, apiSessionToken) {
  * them out is a reasonable difference rather than a gap — but it is a difference, and a user who
  * knows they are in the demat will notice.
  */
-async function fetchHoldings(userId) {
-  const seen = new Map();
-  for (const exchange of ['NSE', 'BSE']) {
-    let rows = [];
+/**
+ * Demat holdings: the complete quantity per stock, INCLUDING shares pledged for margin, but
+ * carrying no prices.
+ *
+ * Two request shapes are tried because Breeze accounts do not behave alike — some need the
+ * `isdemat` flag and some reject it. An empty array is a valid answer (an account can hold
+ * nothing) and is returned as-is rather than treated as a failure to retry.
+ */
+async function fetchDematHoldings(userId) {
+  let lastError = null;
+  for (const body of [{}, { isdemat: 'Y' }]) {
     try {
-      rows = await call(userId, {
-        method: 'GET', path: '/portfolioholdings', body: { exchange_code: exchange },
-      });
-    } catch (e) {
-      // One exchange failing must not lose the other. A user with an NSE-only book should not
-      // see nothing because the BSE call errored.
-      if (e.code === 'BROKER_ERROR') continue;
-      throw e;
-    }
-    for (const h of (Array.isArray(rows) ? rows : [])) {
-      const code = h.stock_code;
-      if (!code) continue;
-      // The same stock can be held on both exchanges; the larger quantity is the real position
-      // rather than the sum, since Breeze reports the whole demat holding against each.
-      const prev = seen.get(code);
-      const qty = Number(h.quantity) || 0;
-      if (!prev || qty > prev.qty) seen.set(code, { ...h, qty, exchange });
-    }
+      // eslint-disable-next-line no-await-in-loop
+      const raw = await call(userId, { method: 'GET', path: '/dematholdings', body });
+      return Array.isArray(raw) ? raw : [];
+    } catch (e) { lastError = e; }
   }
-  return [...seen.values()].map((h) => ({
-    // Broker code, kept as-is here. Normalising to the NSE symbol is the importer's job, not the
-    // client's — the desktop app learned that the hard way when RELIND and RELIANCE became two
-    // stocks. This layer reports what the broker said.
-    brokerSymbol: h.stock_code,
-    symbol: h.stock_code,
-    exchange: h.exchange_code || h.exchange || 'NSE',
-    qty: h.qty,
-    avgCost: Number(h.average_price) || 0,
-    ltp: Number(h.current_market_price) || 0,
-  }));
+  throw lastError;
 }
 
-async function fetchOrders(userId, { from, to }) {
+/** Portfolio holdings for one exchange: carries average_price and current_market_price. */
+async function fetchPortfolioHoldings(userId, exchange) {
+  try {
+    const raw = await call(userId, {
+      method: 'GET', path: '/portfolioholdings', body: { exchange_code: exchange },
+    });
+    return Array.isArray(raw) ? raw : [];
+  } catch (e) {
+    // One exchange failing must not lose the other. An NSE-only book should not come back empty
+    // because the BSE call errored.
+    if (e.code === 'BROKER_ERROR') return [];
+    throw e;
+  }
+}
+
+/**
+ * What the account actually holds.
+ *
+ * TWO ENDPOINTS, BECAUSE NEITHER IS COMPLETE ON ITS OWN. `/portfolioholdings` has the prices but
+ * omits stock the account holds outside its per-exchange view, and on a real account it came
+ * back empty while the demat call returned the whole book. `/dematholdings` has the quantities —
+ * including shares pledged for margin — but no prices at all.
+ *
+ * So demat leads and portfolio supplies the prices. Anything portfolio knows about that demat
+ * did not mention is UNIONED IN rather than dropped: the desktop app found the demat endpoint
+ * goes flaky under load and omits pledged rows entirely rather than reporting them as zero, so
+ * trusting it alone silently loses holdings — and a snapshot that quietly lost a position is
+ * worse than one that failed outright.
+ */
+async function fetchHoldings(userId) {
+  const [demat, nse, bse] = await Promise.all([
+    // A demat failure is survivable; portfolio holdings alone is a worse but usable answer.
+    fetchDematHoldings(userId).catch(() => null),
+    fetchPortfolioHoldings(userId, 'NSE'),
+    fetchPortfolioHoldings(userId, 'BSE'),
+  ]);
+
+  const portfolio = [...nse, ...bse];
+  const codeOf = (h) => h.stock_code || h.stock_code_name || h.isin_code || '';
+
+  // Prices and quantities by stock code. The same stock appears under both exchanges, so the
+  // larger quantity and any non-zero price win rather than the last row overwriting.
+  const priced = new Map();
+  for (const p of portfolio) {
+    const code = codeOf(p);
+    if (!code) continue;
+    const prev = priced.get(code);
+    priced.set(code, {
+      avgCost: Number(p.average_price ?? p.avg_price) || prev?.avgCost || 0,
+      ltp: Number(p.current_market_price ?? p.ltp) || prev?.ltp || 0,
+      qty: Math.max(Number(p.quantity ?? p.total_quantity) || 0, prev?.qty || 0),
+      exchange: prev?.exchange || p.exchange_code || 'NSE',
+    });
+  }
+
+  const dematCodes = new Set((demat || []).map(codeOf).filter(Boolean));
+  const portfolioOnly = portfolio.filter((p) => codeOf(p) && !dematCodes.has(codeOf(p)));
+  const source = demat ? [...demat, ...portfolioOnly] : portfolio;
+
+  const seen = new Set();
+  const rows = [];
+  for (const h of source) {
+    const code = codeOf(h);
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    rows.push(h);
+  }
+
+  return rows.map((h) => {
+    const code = codeOf(h);
+    const pr = priced.get(code) || {};
+    // Demat quantity first — it is the one that includes pledged shares. Where there is no demat
+    // row, the portfolio quantity is all there is.
+    const qty = Number(h.quantity ?? h.total_quantity) || pr.qty || 0;
+    return {
+      // Broker code, kept as-is here. Normalising to the NSE symbol is the importer's job, not
+      // the client's — the desktop app learned that the hard way when RELIND and RELIANCE became
+      // two stocks. This layer reports what the broker said.
+      brokerSymbol: code,
+      symbol: code,
+      exchange: h.exchange_code || pr.exchange || 'NSE',
+      qty,
+      avgCost: pr.avgCost || Number(h.average_price) || 0,
+      ltp: pr.ltp || Number(h.current_market_price) || 0,
+    };
+  }).filter((h) => h.qty > 0);
+}
+
+async function fetchTradesOn(userId, { from, to, exchange }) {
   const rows = await call(userId, {
     method: 'GET',
     path: '/trades',
-    body: { from_date: `${from}T00:00:00.000Z`, to_date: `${to}T23:59:59.000Z`, exchange_code: 'NSE' },
+    // BOTH dates at midnight. Breeze answers an end-of-day `to_date` with "Index was outside the
+    // bounds of the array" — an internal error, not a validation message, so it reads like a
+    // fault at this end. The desktop app sends T00:00:00.000Z for both and has done for months.
+    body: { from_date: `${from}T00:00:00.000Z`, to_date: `${to}T00:00:00.000Z`, exchange_code: exchange },
   });
   return (Array.isArray(rows) ? rows : []).map((t) => {
     const qty = Number(t.quantity || t.traded_quantity) || 0;
@@ -250,6 +324,38 @@ async function fetchOrders(userId, { from, to }) {
       source: 'broker',
     };
   });
+}
+
+/**
+ * Executed trades across the cash exchanges.
+ *
+ * ONE CALL PER EXCHANGE, because a single-exchange query silently misses everything dealt on the
+ * other. Failures are collected rather than thrown: NSE trades are worth having even on a day
+ * BSE will not answer, and a fetch that returns nothing because one exchange errored looks
+ * exactly like a fetch that found nothing.
+ *
+ * The pause between calls is Breeze's rate limit, which answers a burst with errors that read
+ * like data problems.
+ */
+async function fetchOrders(userId, { from, to }) {
+  const all = [];
+  const errors = [];
+  for (const exchange of ['NSE', 'BSE']) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      all.push(...await fetchTradesOn(userId, { from, to, exchange }));
+    } catch (e) {
+      errors.push(`${exchange}: ${e.message}`);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => { setTimeout(r, 350); });
+  }
+  // Only a total failure is worth raising — a partial answer is still an answer.
+  if (!all.length && errors.length === 2) {
+    throw Object.assign(new Error(`ICICI Direct returned no trades: ${errors.join('; ')}`),
+      { code: 'BROKER_ERROR' });
+  }
+  return all.filter((o) => o.symbol && o.quantity > 0);
 }
 
 module.exports = { BROKER, loginUrl, connect, fetchHoldings, fetchOrders, sessionExpiry, toYMD };
