@@ -72,17 +72,28 @@ function trailingReturn(closes, days) {
 }
 
 /**
- * EMA 20/50/200 ladder. The desktop app's qualifying filter for the Top 25 keys off this, so
- * the labels have to match exactly: STRONG_UPTREND and PULLBACK qualify, nothing else does.
+ * EMA 20/50/200 ladder — a straight port of the desktop app's `ema_trend` (portfolio_health.py).
+ * The Top 25 qualifying filter keys off this, so the labels and the boundaries both have to
+ * match exactly: STRONG_UPTREND and PULLBACK qualify, nothing else does.
+ *
+ * THERE USED TO BE TWO OF THESE. An earlier version of this function scored the same ladder with
+ * a different vocabulary (BELOW_200/SIDEWAYS in place of DISTRIBUTION/MIXED) and looser
+ * boundaries — it treated a missing 200 EMA as "above" and did not require ema50 > ema200 for an
+ * uptrend. Measured against the desktop app over 500 NIFTY500 stocks the two disagreed on 228 of
+ * them, which moved 6 names in and out of the Top 25. One classifier now, this one.
+ *
+ * A FULL 200 EMA IS REQUIRED, which the desktop app does not enforce — pandas' ewm(span=200)
+ * returns a value from the first bar, so a stock with 60 days of history gets a "200 EMA" that is
+ * really a 60-day average, and a ladder read off it. Here that returns null and the stock sits
+ * out of the ranking until it has the history to earn a place in it.
  */
 function emaLadder({ price, ema20, ema50, ema200 }) {
-  if (![price, ema20, ema50].every(Number.isFinite)) return null;
-  const above200 = Number.isFinite(ema200) ? price > ema200 : true;
-  if (price > ema20 && ema20 > ema50 && above200) return 'STRONG_UPTREND';
-  if (price > ema50 && ema20 <= ema50 && above200) return 'PULLBACK';
-  if (price < ema20 && ema20 < ema50) return 'DOWNTREND';
-  if (Number.isFinite(ema200) && price < ema200) return 'BELOW_200';
-  return 'SIDEWAYS';
+  if (![price, ema20, ema50, ema200].every(Number.isFinite)) return null;
+  if (price > ema20 && ema20 > ema50 && ema50 > ema200) return 'STRONG_UPTREND';
+  if (ema50 > ema200 && price < ema20 && price > ema50) return 'PULLBACK';    // dip within an uptrend
+  if (ema50 > ema200 && price < ema50)                  return 'DISTRIBUTION'; // uptrend cracking
+  if (price < ema200 && ema50 < ema200)                 return 'DOWNTREND';
+  return 'MIXED';
 }
 
 /** Consecutive most-recent closes strictly below their aligned EMA value. */
@@ -105,20 +116,12 @@ function classifyTrendSma({ price, dma50, dma200 }) {
 }
 
 /**
- * EMA ladder for the Action Queue's early triggers — distinct from `emaLadder` above, which
- * feeds the Top 25 qualifying filter and uses a different label set (STRONG_UPTREND/PULLBACK/
- * DOWNTREND/BELOW_200/SIDEWAYS). This one matches the desktop app's momentum-snapshot
- * classifier: STRONG_UPTREND / PULLBACK / DISTRIBUTION / DOWNTREND / MIXED, all requiring a
- * full 200-EMA so a young listing reports null rather than a guess.
+ * The Action Queue's trend read. Kept as a separate name because that is what actionQueueService
+ * asks for, but it is now the same function as `emaLadder` — the Action Queue and the Top 25 were
+ * reading the same ladder through two classifiers that disagreed, which is how a stock could be
+ * PULLBACK on one screen and SIDEWAYS on another.
  */
-function classifyEmaLadderAQ({ price, ema20, ema50, ema200 }) {
-  if (![price, ema20, ema50, ema200].every(Number.isFinite)) return null;
-  if (price > ema20 && ema20 > ema50 && ema50 > ema200) return 'STRONG_UPTREND';
-  if (ema50 > ema200 && price < ema20 && price > ema50)  return 'PULLBACK';
-  if (ema50 > ema200 && price < ema50)                   return 'DISTRIBUTION';
-  if (price < ema200 && ema50 < ema200)                  return 'DOWNTREND';
-  return 'MIXED';
-}
+const classifyEmaLadderAQ = emaLadder;
 
 /** Realised volatility, annualised, from the last `days` log returns. */
 function realisedVol(closes, days = 21) {

@@ -266,11 +266,13 @@ async function renderHealth(body) {
 
 const concernTag = (k) => ({ weak: 'off', trend: 'pend', drawdown: 'off',
   concentration: 'admin', sector: 'admin', unscored: 'user' }[k] || 'user');
+// One ladder vocabulary across every screen now (see indicators.js). SIDEWAYS and BELOW_200 are
+// kept only so rows scanned before the two classifiers were unified still get a colour instead
+// of falling through to the default.
 const ladderTag = (l) => ({ STRONG_UPTREND: 'src-orders', PULLBACK: 'admin',
-  SIDEWAYS: 'user', DOWNTREND: 'off', BELOW_200: 'pend' }[l] || 'user');
-// The Action Queue's ladder is a different 5-state read (see indicators.js) — its own colour map.
-const aqLadderTag = (l) => ({ STRONG_UPTREND: 'src-orders', PULLBACK: 'admin',
-  DISTRIBUTION: 'pend', DOWNTREND: 'off', MIXED: 'user' }[l] || 'user');
+  DISTRIBUTION: 'pend', DOWNTREND: 'off', MIXED: 'user',
+  SIDEWAYS: 'user', BELOW_200: 'pend' }[l] || 'user');
+const aqLadderTag = ladderTag;
 
 // ── action queue ─────────────────────────────────────────────────────────────
 const SIGNAL_META = {

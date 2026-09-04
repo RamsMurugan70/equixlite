@@ -58,12 +58,25 @@ console.log('\nEMA ladder');
 {
   check('stacked and rising is STRONG_UPTREND',
     ind.emaLadder({ price: 110, ema20: 105, ema50: 100, ema200: 90 }) === 'STRONG_UPTREND');
-  check('above 50 but 20 has crossed under is PULLBACK',
-    ind.emaLadder({ price: 102, ema20: 99, ema50: 100, ema200: 90 }) === 'PULLBACK');
+  // A dip THROUGH the 20 EMA that holds the 50, with the 50 still over the 200. The earlier
+  // classifier called this SIDEWAYS and kept the stock out of the Top 25; the desktop app has
+  // always called it a buyable dip, and that disagreement covered 43 of the 500 NIFTY500 names.
+  check('a dip below the 20 that holds the 50 is PULLBACK',
+    ind.emaLadder({ price: 102, ema20: 105, ema50: 100, ema200: 90 }) === 'PULLBACK');
+  check('losing the 50 in an intact uptrend is DISTRIBUTION',
+    ind.emaLadder({ price: 95, ema20: 98, ema50: 100, ema200: 90 }) === 'DISTRIBUTION');
   check('stacked downwards is DOWNTREND',
     ind.emaLadder({ price: 90, ema20: 95, ema50: 100, ema200: 105 }) === 'DOWNTREND');
+  check('above the 200 but the 50 has not caught up is MIXED',
+    ind.emaLadder({ price: 120, ema20: 105, ema50: 100, ema200: 115 }) === 'MIXED');
   check('missing price gives null, not a guess',
-    ind.emaLadder({ price: null, ema20: 1, ema50: 2 }) === null);
+    ind.emaLadder({ price: null, ema20: 1, ema50: 2, ema200: 3 }) === null);
+  // Deliberately stricter than the desktop app, which reads a ladder off a 200 EMA seeded on as
+  // few as 50 bars. A stock without the history sits out rather than being ranked on a guess.
+  check('no 200 EMA yet gives null rather than a ladder',
+    ind.emaLadder({ price: 110, ema20: 105, ema50: 100, ema200: null }) === null);
+  check('the Action Queue reads the very same ladder',
+    ind.classifyEmaLadderAQ === ind.emaLadder);
 }
 
 // ── Returns and drawdown ──────────────────────────────────────────────────────

@@ -99,7 +99,9 @@ async function portfolioHealth(userId, portfolioId) {
     } else if (r.combinedScore < 40) {
       concerns.push({ kind: 'weak', symbol: r.symbol,
         detail: `Score ${r.combinedScore} — ${r.rating.toLowerCase()}` });
-    } else if (r.emaLadder === 'DOWNTREND' || r.emaLadder === 'BELOW_200') {
+    // DISTRIBUTION is an uptrend cracking — worth flagging for the same reason DOWNTREND is.
+    // (It replaced BELOW_200 when the ladder was unified on the desktop app's vocabulary.)
+    } else if (r.emaLadder === 'DOWNTREND' || r.emaLadder === 'DISTRIBUTION') {
       concerns.push({ kind: 'trend', symbol: r.symbol,
         detail: `Trend is ${r.emaLadder.replace(/_/g, ' ').toLowerCase()}` });
     }

@@ -5,10 +5,17 @@
 // machine and will never exist on the server. Migrations run everywhere and must not depend on
 // something only true here.
 //
-// RANKINGS ONLY. `universe_top_daily` is the whole of what the matcher reads — universe, date,
-// rank, symbol. The desktop app's `universe_scores` is fifty thousand rows that nothing in this
-// app reads historically, and its scores come from a scanner whose EMA-ladder boundaries differ
-// from indicators.js, so importing them would add bulk and an ambiguity for no reader.
+// RANKINGS ONLY. `universe_top_daily` is the whole of what the attribution matcher reads —
+// universe, date, rank, symbol.
+//
+// This used to be justified partly on the two apps classifying the EMA ladder differently, which
+// made an imported score mean something subtly other than a local one. That is no longer true:
+// indicators.js now runs the desktop app's `ema_trend` rules exactly. What still argues against
+// importing `universe_scores` is narrower — the desktop app's fundamental leg reads Yahoo's
+// debtToEquity as a ratio when it is a percentage, so its combined scores sit a few points low
+// on most non-financials. Import those and Stock Sleuth's history would show a step change on
+// the day the two apps met, which is an artefact of the bug rather than anything the market did.
+// Fix that in portfolio_health.py first, then importing scores becomes worth doing.
 //
 // A LOCAL SCAN IS NEVER OVERWRITTEN. If this app has already ranked a date itself, that is the
 // better record of what it would say, and the import leaves it alone. So the script is safe to
