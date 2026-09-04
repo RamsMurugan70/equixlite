@@ -27,6 +27,7 @@ router.get('/stocks/:symbol', requireTrader, c.stockProfile);
 
 router.get('/portfolio/health', requireTrader, c.portfolioHealth);
 router.get('/action-queue', requireTrader, c.actionQueueView);
+router.get('/exit-candidates', requireTrader, c.exitCandidatesView);
 router.get('/performance', requireTrader, c.performanceView);
 router.get('/decision-review', requireTrader, c.decisionReviewView);
 

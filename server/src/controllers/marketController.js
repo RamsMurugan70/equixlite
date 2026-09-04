@@ -13,6 +13,7 @@ const pickerMatch = require('../services/recommendations/pickerMatchService');
 const brokerCatalog = require('../services/broker/brokerCatalog');
 const decisionReview = require('../services/portfolio/decisionReviewService');
 const portfolioAlerts = require('../services/portfolio/alertsService');
+const exitCandidates = require('../services/portfolio/exitCandidatesService');
 const repo = require('../repositories/portfolioRepository');
 
 const USER_FIXABLE = new Set([
@@ -142,6 +143,15 @@ async function actionQueueView(req, res, next) {
   } catch (e) { return fail(res, next, e); }
 }
 
+async function exitCandidatesView(req, res, next) {
+  try {
+    res.json(await exitCandidates.getExitCandidates(req.user.id, {
+      windowDays: Number(req.query.window) || undefined,
+      universe: req.query.universe || undefined,
+    }));
+  } catch (e) { return fail(res, next, e); }
+}
+
 // ── Performance ──────────────────────────────────────────────────────────────
 async function performanceView(req, res, next) {
   try {
@@ -247,6 +257,7 @@ async function dashboard(req, res, next) {
 
 module.exports = {
   topPicks, scanStatus, startScan, stockProfile, symbolSearch,
-  portfolioHealth, actionQueueView, pickerMatchesView, untrackedHoldingsView, decisionReviewView,
+  portfolioHealth, actionQueueView, exitCandidatesView, pickerMatchesView, untrackedHoldingsView,
+  decisionReviewView,
   performanceView, dashboard,
 };

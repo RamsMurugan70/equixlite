@@ -209,7 +209,13 @@ $('#f-setup').addEventListener('submit', async (e) => {
 // furniture, not navigation.
 const GROUPS = [
   { key: 'dashboard', label: 'Dashboard', views: [['dashboard', 'Dashboard']] },
-  { key: 'action', label: 'Action Queue', views: [['actionqueue', 'Action Queue']] },
+  {
+    key: 'action',
+    label: 'Action Queue',
+    // Same question from two distances: the queue reads today, exit candidates read the last
+    // thirty scan days. A stock can be quiet on one and loud on the other.
+    views: [['actionqueue', 'Action Queue'], ['exits', 'Exit candidates']],
+  },
   {
     key: 'portfolio',
     label: 'Portfolio',
@@ -319,6 +325,7 @@ async function openTab(key) {
   try {
     if (key === 'dashboard') await renderDashboard(body);
     if (key === 'actionqueue') await renderActionQueue(body);
+    else if (key === 'exits') await renderExitCandidates(body);
     if (key === 'holdings') await renderHoldings(body);
     if (key === 'dailysync') await renderDailySync(body);
     if (key === 'untracked') await renderUntracked(body);

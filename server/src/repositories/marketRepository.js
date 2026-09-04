@@ -128,6 +128,68 @@ async function replaceDailyTop(universe, scanDate, top) {
   return top.length;
 }
 
+/**
+ * The worst-scoring N for a date. Mirrors replaceDailyTop, including the delete-then-insert, so
+ * a re-scan of the same day replaces the ranking rather than doubling it.
+ *
+ * NO LADDER FILTER, unlike the Top 25. That filter exists there to avoid recommending a falling
+ * knife — it keeps DOWNTREND out of a buy list. Applying it here would remove exactly the stocks
+ * this list is for.
+ */
+async function replaceDailyBottom(universe, scanDate, bottom) {
+  await withSharedDatabase(async (db) => {
+    await db.run('DELETE FROM universe_bottom_daily WHERE universe = ? AND scan_date = ?',
+      [universe, scanDate]);
+    for (const r of bottom) {
+      await db.run(
+        'INSERT INTO universe_bottom_daily (universe, scan_date, rank, symbol, score) VALUES (?,?,?,?,?)',
+        [universe, scanDate, r.rank, r.symbol, r.combinedScore ?? null]);
+    }
+  });
+  return bottom.length;
+}
+
+/**
+ * How often each of `symbols` sat in the bottom ranking over a trailing window, against how many
+ * scan days there were to sit in.
+ *
+ * BOTH NUMBERS MATTER. "In the bottom 25 on eight days" means something very different when the
+ * window holds ten scan days than when it holds sixty, and a count without its denominator
+ * invites the reader to supply the wrong one.
+ */
+async function bottomAppearances(universe, symbols, sinceDate) {
+  const list = [...new Set(symbols.map((s) => String(s || '').toUpperCase()).filter(Boolean))];
+  if (!list.length) return { totalDays: 0, rows: [] };
+  const ph = list.map(() => '?').join(',');
+  return withSharedDatabase(async (db) => {
+    const t = await db.get(
+      `SELECT COUNT(DISTINCT scan_date) AS n FROM universe_bottom_daily
+        WHERE universe = ? AND scan_date >= ?`, [universe, sinceDate]);
+    const rows = await db.all(
+      `SELECT UPPER(symbol) AS symbol,
+              COUNT(DISTINCT scan_date) AS appearances,
+              MIN(rank) AS worstRank,
+              MAX(scan_date) AS lastSeen,
+              ROUND(AVG(rank), 1) AS avgRank
+         FROM universe_bottom_daily
+        WHERE universe = ? AND scan_date >= ? AND UPPER(symbol) IN (${ph})
+        GROUP BY UPPER(symbol)
+        ORDER BY appearances DESC, avgRank ASC`,
+      [universe, sinceDate, ...list]);
+    return { totalDays: t?.n || 0, rows };
+  });
+}
+
+async function bottomForDate(universe, scanDate) {
+  return withSharedDatabase((db) => db.all(
+    `SELECT b.rank, b.symbol, b.score, s.name, s.industry, s.rsi, s.r1m, s.r3m, s.detail_json
+       FROM universe_bottom_daily b
+       LEFT JOIN universe_scores s
+         ON s.universe = b.universe AND s.scan_date = b.scan_date AND s.symbol = b.symbol
+      WHERE b.universe = ? AND b.scan_date = ?
+      ORDER BY b.rank`, [universe, scanDate]));
+}
+
 async function latestScanDate(universe) {
   const r = await withSharedDatabase((db) => db.get(
     'SELECT MAX(scan_date) AS d FROM universe_top_daily WHERE universe = ?', [universe]));
@@ -301,6 +363,7 @@ module.exports = {
   cacheGet, cacheSet, cachePurge,
   upsertSymbols, listSymbols, symbolCount, lookupSymbol,
   saveScanRows, replaceDailyTop, latestScanDate, topForDate, scanDates, topAppearances, stockScanHistory,
+  replaceDailyBottom, bottomAppearances, bottomForDate,
   latestScoresFor, corporateActionsFor,
   getFundamentals, saveFundamentals,
 };

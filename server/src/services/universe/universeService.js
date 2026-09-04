@@ -270,9 +270,22 @@ async function runScan({ trigger = 'manual', concurrency = 6, limit = null } = {
         .sort((a, b) => b.combinedScore - a.combinedScore)
         .slice(0, TOP_N)
         .map((r, i) => ({ ...r, rank: i + 1 }));
+
+      // The other end, unfiltered by ladder: this list is FOR the downtrends the Top 25 filter
+      // exists to keep out. Rank 1 is the worst score, so a low rank reads as more urgent on
+      // both lists rather than meaning opposite things on each.
+      const worst = mine
+        .filter((r) => Number.isFinite(r.combinedScore))
+        .sort((a, b) => a.combinedScore - b.combinedScore)
+        .slice(0, TOP_N)
+        .map((r, i) => ({ ...r, rank: i + 1 }));
+
       // eslint-disable-next-line no-await-in-loop
       if (!partial) await market.replaceDailyTop(key, state.scanDate, ranked);
-      perUniverse.push({ universe: key, scored: mine.length, top: partial ? 0 : ranked.length });
+      // eslint-disable-next-line no-await-in-loop
+      if (!partial) await market.replaceDailyBottom(key, state.scanDate, worst);
+      perUniverse.push({ universe: key, scored: mine.length, top: partial ? 0 : ranked.length,
+        bottom: partial ? 0 : worst.length });
     }
     state.universes = perUniverse;
 

@@ -353,6 +353,67 @@ const signalBadge = (signal) => el('span', { className: `pill ${(SIGNAL_META[sig
 
 let aqFilter = 'ALL';
 
+// ── exit candidates ──────────────────────────────────────────────────────────
+const URGENCY_TAG = { urgent: 'off', watch: 'pend', noted: 'user' };
+
+async function renderExitCandidates(body, opts = {}) {
+  const win = opts.window || 30;
+  const uni = opts.universe || 'NIFTY500';
+  const d = await api(`/api/exit-candidates?window=${win}&universe=${uni}`);
+  const nodes = [];
+
+  // Both selectors re-render in place rather than reloading the view, so a change of window
+  // keeps the reader where they were.
+  const rerender = (o) => renderExitCandidates(body, { window: win, universe: uni, ...o });
+  const pick = (label, values, current, key, fmt = String) => {
+    const wrap = el('div', { className: 'pwrap' }, el('span', { className: 'muted' }, label));
+    for (const v of values) {
+      const b = el('button', { className: v === current ? '' : 'sm', textContent: fmt(v) });
+      b.onclick = () => rerender({ [key]: v });
+      wrap.append(b);
+    }
+    return wrap;
+  };
+
+  nodes.push(el('div', { className: 'row' },
+    pick('Window', d.windows || [7, 30, 90, 180], d.windowDays, 'window', (v) => `${v}d`),
+    pick('Index', d.universes || ['NIFTY500'], d.universe, 'universe',
+      (v) => v.replace('NIFTY500', 'Nifty 500').replace('MIDCAP', 'Midcap')
+        .replace('SMALLCAP', 'Smallcap').replace('MICROCAP', 'Microcap'))));
+
+  nodes.push(el('p', { className: 'muted' },
+    'How often each holding has sat in the bottom 25 of its index. The Action Queue reads today; '
+    + 'this reads the whole window, which is what catches a position coming apart too slowly to '
+    + 'trip a single day’s signal.'));
+
+  if (!d.candidates.length) {
+    nodes.push(el('div', { className: 'panel-inset' },
+      el('h3', {}, 'Nothing is persistently weak'),
+      el('p', { className: 'muted' }, d.note || '')));
+    body.replaceChildren(...nodes);
+    return;
+  }
+
+  nodes.push(table(
+    ['Symbol', 'In bottom 25', 'Share of days', 'Worst rank', 'Last seen', 'Qty', 'P&L', 'Where'],
+    d.candidates.map((c) => [
+      symbolLink(c.symbol),
+      `${c.appearances} of ${c.totalScanDays} day(s)`,
+      el('span', { className: `tag ${URGENCY_TAG[c.urgency] || 'user'}` }, `${c.appearancePct}%`),
+      c.worstRank ? `#${c.worstRank}` : '—',
+      c.lastSeen || '—',
+      c.quantity ? String(c.quantity) : '—',
+      signed(c.pnlPct, (v) => `${v.toFixed(2)}%`),
+      (c.portfolios || []).join(', ') || '—',
+    ])));
+
+  nodes.push(el('p', { className: 'muted' },
+    `${d.totalScanDays} scan day(s) on record in this window, across ${d.held} holding(s). `
+    + 'A holding only appears here if it is a constituent of the index selected above.'));
+
+  body.replaceChildren(...nodes);
+}
+
 async function renderActionQueue(body) {
   const d = await api('/api/action-queue');
   const nodes = [];
